@@ -66,6 +66,7 @@ MODES = ("all", "click", "slide", "fixed")
 BAR_STYLES = ("auto", "bars", "numbers")
 PLACEMENTS = ("left", "auto")                 # left = 위젯/시작 버튼 뒤 첫 빈 공간에 고정 / auto = 들어가는 가장 왼쪽 빈 공간
 OVERFLOW_POLICIES = ("slide", "numbers", "collapse")   # «모두 동시에» 가 안 들어갈 때
+INDICATORS = ("dots", "arrow", "none")        # 클릭 전환·슬라이드 모드의 전환 표시: 왼쪽 페이지 점 / 왼쪽 ⇄ / 없음(항목 클릭만)
 DEFAULT_SETTINGS = {
     "entries": [],               # [{"provider", "path", "label", "enabled", "windows": {"5h": True, "7d": True}}]
     "display_mode": "all",       # all = 모두 동시에 / click = 클릭으로 전환 / slide = 자동 슬라이드 / fixed = 하나 고정
@@ -75,6 +76,7 @@ DEFAULT_SETTINGS = {
     "style": {"label": False, "bars": "auto", "label_color": ""},
     "placement": "left",
     "overflow_policy": "slide",
+    "switch_indicator": "dots",
     "language": "auto",
     "data_source": "api",        # api = 비공식 API / official = 상태줄 데이터만 (네트워크 0)
     "official_hide_unsupported": True,
@@ -123,6 +125,8 @@ def load_settings():
         s["placement"] = raw["placement"]
     if raw.get("overflow_policy") in OVERFLOW_POLICIES:
         s["overflow_policy"] = raw["overflow_policy"]
+    if raw.get("switch_indicator") in INDICATORS:
+        s["switch_indicator"] = raw["switch_indicator"]
     if raw.get("language") in ("auto",) + SUPPORTED:
         s["language"] = raw["language"]
     if raw.get("data_source") in ("api", "official"):
@@ -230,6 +234,9 @@ class StatusBar:
         self.tooltip_job = None
         self.tooltip_entry = None
         self.entry_spans = []                          # [(x0, x1, entry)] — 툴팁 히트 테스트용
+        self.dots = []                                 # [(x0, x1, index)] — 페이지 점 히트 테스트용
+        self.dots_span = None                          # 점 영역 전체 (x0, x1)
+        self.mini_tip = None                           # 점 위 한 줄 툴팁
         self._tags = ()
         self.menu = self.build_menu()
 
@@ -619,6 +626,7 @@ class StatusBar:
         st = self.cfg()["style"]
         spans = []
         x = self.px(4)
+        x = self.draw_indicator(c, x, h)
         for i, e in enumerate(ents):
             if i:
                 c.create_line(x, self.px(8), x, h - self.px(8), fill=self.line)
@@ -633,9 +641,52 @@ class StatusBar:
         self._tags = ()
         if c is self.canvas and self._ov is None:
             self.entry_spans = spans
-        if self.switchable():
-            x = self.text(c, x, h // 2, "⇄", self.dim, self.font(13, True), gap=4, tags=("switch",))
         return x
+
+    def draw_indicator(self, c, x, h):
+        """클릭 전환·슬라이드 모드(항목 2개 이상)일 때 바 왼쪽 끝에 페이지 점 ● ○ ○ 또는 ⇄. 점 간격은 고정 → 항목 폭이 바뀌어도 위치 불변."""
+        live = c is self.canvas and self._ov is None
+        if live:
+            self.dots, self.dots_span = [], None
+        if not self.switchable():
+            return x
+        ind = self.cfg()["switch_indicator"]
+        ents = self.enabled_entries()
+        cur = 0 if self._ov else (self.cur % len(ents))
+        if ind == "dots":
+            step, r = self.px(12), self.px(3)
+            x0 = x + self.px(2)
+            dots = []
+            for i in range(len(ents)):
+                cx = x0 + r + i * step
+                col = self.fg if i == cur else self.dim
+                c.create_oval(cx - r, h // 2 - r, cx + r, h // 2 + r, fill=col, outline=col, tags=("dot", f"dot:{i}"))
+                dots.append((cx - step // 2, cx + step // 2, i))
+            x1 = x0 + r + (len(ents) - 1) * step + r + self.px(2)
+            if live:
+                self.dots, self.dots_span = dots, (x0, x1)
+            return x1 + self.px(6)
+        if ind == "arrow":
+            nx = self.text(c, x, h // 2, "⇄", self.dim, self.font(13, True), gap=6, tags=("switch",))
+            if live:
+                self.dots_span = (x, nx - self.px(6))
+            return nx
+        return x
+
+    def dot_at(self, x):
+        for x0, x1, i in self.dots:
+            if x0 <= x <= x1:
+                return i
+        if self.dots_span and not self.dots and self.dots_span[0] <= x <= self.dots_span[1]:
+            return -1                                   # ⇄ 버튼
+        return None
+
+    def go_to(self, i):
+        ents = self.enabled_entries()
+        if ents:
+            self.cur = i % len(ents)
+            self.relayout()
+        self.schedule_cycle()
 
     def draw_entry(self, c, x, h, e, mode):
         d = (self._ov["data"] if self._ov else self.data).get(entry_key(e)) or {}
@@ -713,7 +764,10 @@ class StatusBar:
             self.popup = None
 
     def on_left(self, e):
-        if "switch" in self.canvas.gettags("current"):
+        di = self.dot_at(e.x) if self.mode != "collapsed" else None
+        if di is not None and di >= 0:
+            self.go_to(di)
+        elif di == -1 or "switch" in self.canvas.gettags("current"):
             self.next_entry()
         elif self.mode == "collapsed":
             self.toggle_popup()
@@ -738,6 +792,19 @@ class StatusBar:
     def on_motion(self, ev):
         if not self.hovering:
             self.on_enter(ev)
+        di = self.dot_at(ev.x) if self.mode != "collapsed" else None
+        if di is not None:
+            if self.tooltip_entry is not None or not self.canvas.find_withtag("hover"):
+                self.hide_tooltip()
+                self.tooltip_entry = None
+                self.set_hover(None, dots=True)
+            if di >= 0:
+                ents = self.enabled_entries()
+                self.show_mini_tip(f"{di + 1}/{len(ents)} · {get_provider(ents[di]['provider']).short} {ents[di]['label']}", ev.x_root)
+            else:
+                self.show_mini_tip(t("menu_next"), ev.x_root)
+            return
+        self.hide_mini_tip()
         e = self.entry_at(ev.x)
         if e is not self.tooltip_entry:
             self.hide_tooltip()
@@ -758,26 +825,57 @@ class StatusBar:
 
     def on_leave(self, ev=None):
         self.hide_tooltip()
+        self.hide_mini_tip()
         self.tooltip_entry = None
         self.set_hover(None)
         self.hovering = False
         self.schedule_cycle()                          # 방금 본 항목을 최소 한 주기 더 — 남은 시간이 아니라 주기 전체
 
-    def set_hover(self, e):
-        """항목 영역에 둥근 하이라이트. 투명 키 색과 다른 색이라 실제로 그려진다."""
+    def set_hover(self, e, dots=False):
+        """항목 영역(또는 점 영역)에 둥근 하이라이트. 투명 키 색과 다른 색이라 실제로 그려진다."""
         c = self.canvas
         c.delete("hover")
-        c.configure(cursor="hand2" if (e is not None and (self.switchable() or self.mode != "full")) else "")
-        if e is None:
+        clickable = dots or (e is not None and (self.switchable() or self.mode != "full"))
+        c.configure(cursor="hand2" if clickable else "")
+        dark = sum(self.bg) / 3 < 128
+        fill, outline = ("#2c2c2c", "#3a3a3a") if dark else ("#e6e6e6", "#d0d0d0")
+        span = None
+        if dots and self.dots_span:
+            span = (self.dots_span[0] - self.px(3), self.dots_span[1] + self.px(3))
+        elif e is not None:
+            for x0, x1, ent in self.entry_spans:
+                if ent is e:
+                    span = (x0 - self.px(5), x1 + self.px(1))
+                    break
+        if span is None:
             return
-        for x0, x1, ent in self.entry_spans:
-            if ent is e:
-                dark = sum(self.bg) / 3 < 128
-                fill, outline = ("#2c2c2c", "#3a3a3a") if dark else ("#e6e6e6", "#d0d0d0")
-                pts = rounded_points(x0 - self.px(5), self.px(4), x1 + self.px(1), self.h - self.px(4), self.px(6))
-                item = c.create_polygon(*pts, fill=fill, outline=outline, width=1, smooth=False, tags=("hover",))
-                c.tag_lower(item)
-                break
+        pts = rounded_points(span[0], self.px(4), span[1], self.h - self.px(4), self.px(6))
+        item = c.create_polygon(*pts, fill=fill, outline=outline, width=1, smooth=False, tags=("hover",))
+        c.tag_lower(item)
+
+    def show_mini_tip(self, text, x_root):
+        """점 위 한 줄 툴팁 (카드 아님)."""
+        if self.mini_tip and self.mini_tip_text == text:
+            return
+        self.hide_mini_tip()
+        tip = tk.Toplevel(self.root)
+        tip.overrideredirect(True)
+        tip.attributes("-topmost", True)
+        tip.configure(bg="#444444")
+        tk.Label(tip, text=text, bg="#1e1e1e", fg="#f0f0f0", font=self.font(8), padx=8, pady=3).pack(padx=1, pady=1)
+        tip.update_idletasks()
+        _, top, _, bottom = tb.win_rect(tb.taskbar())
+        tw, th = tip.winfo_reqwidth(), tip.winfo_reqheight()
+        x = max(0, min(int(x_root - tw / 2), self.root.winfo_screenwidth() - tw))
+        y = top - th - self.px(6) if top > 0 else bottom + self.px(6)
+        tip.geometry(f"+{x}+{y}")
+        self.mini_tip, self.mini_tip_text = tip, text
+
+    def hide_mini_tip(self):
+        if self.mini_tip:
+            self.mini_tip.destroy()
+            self.mini_tip = None
+            self.mini_tip_text = None
 
     def tooltip_text(self, e):
         p = get_provider(e["provider"])
@@ -949,7 +1047,7 @@ class StatusBar:
     PRESETS = (
         ("default", {"display_mode": "all", "show_scoped": False, "style": {"label": False, "bars": "bars"}}),
         ("minimal", {"display_mode": "all", "show_scoped": False, "style": {"label": False, "bars": "numbers"}}),
-        ("labels", {"display_mode": "all", "show_scoped": False, "style": {"label": True, "bars": "bars"}}),
+        ("click", {"display_mode": "click", "show_scoped": False, "style": {"label": False, "bars": "auto"}}),
         ("full", {"display_mode": "all", "show_scoped": True, "style": {"label": False, "bars": "bars"}}),
         ("slide", {"display_mode": "slide", "show_scoped": False, "style": {"label": True, "bars": "auto"}}),
         ("pinned", {"display_mode": "fixed", "show_scoped": True, "style": {"label": False, "bars": "auto"}}),
@@ -981,6 +1079,7 @@ class StatusBar:
             "show_scoped": self.v_scoped.get(),
             "style": {"label": self.v_label.get(), "bars": self.v_bars.get(), "label_color": self.v_label_color.get()},
             "placement": self.v_placement.get(), "overflow_policy": self.v_overflow.get(),
+            "switch_indicator": self.v_indicator.get(),
             "language": language, "data_source": self.v_ds.get(),
             "official_hide_unsupported": self.v_hide.get(),
             "seen_providers": [p.id for p in PROVIDERS],
@@ -1294,6 +1393,7 @@ class StatusBar:
         self.v_label_color = self.watch_var(tk.StringVar(value=st["label_color"]))
         self.v_placement = self.watch_var(tk.StringVar(value=self.settings["placement"]))
         self.v_overflow = self.watch_var(tk.StringVar(value=self.settings["overflow_policy"]))
+        self.v_indicator = self.watch_var(tk.StringVar(value=self.settings["switch_indicator"]))
         names = [n for _, n in self.fixed_choices()]
         cur = next((n for k, n in self.fixed_choices() if k == self.settings["fixed_entry"]), names[0] if names else "")
         self.v_fixed = self.watch_var(tk.StringVar(value=cur))
@@ -1343,9 +1443,14 @@ class StatusBar:
         ttk.Label(orow, text=t("overflow_label")).pack(side="left")
         for val in OVERFLOW_POLICIES:
             ttk.Radiobutton(orow, text=t(f"policy_{val}"), variable=self.v_overflow, value=val).pack(side="left", padx=(10, 0))
+        irow = ttk.Frame(f)
+        irow.grid(row=row + 4, column=0, columnspan=4, sticky="w", pady=(2, 0))
+        ttk.Label(irow, text=t("indicator_label")).pack(side="left")
+        for val in INDICATORS:
+            ttk.Radiobutton(irow, text=t(f"indicator_{val}"), variable=self.v_indicator, value=val).pack(side="left", padx=(10, 0))
 
         # 모양
-        row = self.section(f, "sec_look", row + 4)
+        row = self.section(f, "sec_look", row + 5)
         lf = ttk.Frame(f)
         lf.grid(row=row, column=0, columnspan=4, sticky="ew")
         ttk.Checkbutton(lf, text=t("style_label"), variable=self.v_label).grid(row=0, column=0, sticky="w")
@@ -1355,9 +1460,8 @@ class StatusBar:
         ttk.Label(brow, text=t("style_bars")).pack(side="left")
         for val in BAR_STYLES:
             ttk.Radiobutton(brow, text=t(f"style_bars_{val}"), variable=self.v_bars, value=val).pack(side="left", padx=(10, 0))
-        crow = ttk.Frame(f)
-        crow.grid(row=row + 2, column=0, columnspan=4, sticky="w", pady=(6, 0))
-        ttk.Label(crow, text=t("style_colors")).pack(side="left")
+        crow = brow
+        ttk.Label(crow, text=t("style_colors")).pack(side="left", padx=(22, 0))
         for key, var in (("style_label_color", self.v_label_color),):
             ttk.Label(crow, text=t(key)).pack(side="left", padx=(10, 4))
             chip = tk.Label(crow, width=3, relief="solid", bd=1, bg=var.get() or "#e0e0e0")

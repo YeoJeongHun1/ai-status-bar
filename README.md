@@ -78,6 +78,7 @@ Claude work   5h ▬▬▬░░░░░ 23% ↺12:09   │   Codex work   5h �
   «계정이 안 보여요?» 가 서비스별로 안 뜨는 이유를 설명합니다.
 - **데이터 원본** — 비공식 API(5분마다) 또는 공식 모드(아래 절). 공식 모드에서 공식 데이터가 없는 항목(Codex)은 숨길 수 있습니다.
 - **표시 방식** — 모든 항목 동시에 / 클릭으로 전환 / 자동 슬라이드(5~3600초) / 하나 고정(항목 선택). 자동 슬라이드는 **마우스가 바 위에 있는 동안 멈추고**, 벗어나면 주기를 처음부터 다시 셉니다.
+  - **캐러셀** — «클릭으로 전환»·«자동 슬라이드»에서는 항목 영역 전체가 클릭 대상(누르면 다음). 바 왼쪽 끝에 페이지 점 `● ○ ○`(현재 항목 밝게, 점을 누르면 그 항목으로, 올리면 «2/3 · Codex work»). 점 대신 «왼쪽 ⇄ 버튼» 또는 «없음»으로 바꿀 수 있습니다. 점 간격이 고정이라 항목 폭이 바뀌어도 위치가 안 흔들립니다.
   - **위치** — «왼쪽 고정»(기본): 위젯·시작 버튼 뒤 첫 빈 공간에만 놓고 다른 빈 공간으로 건너뛰지 않습니다. «자동»: 들어가는 가장 왼쪽 빈 공간.
   - **안 들어갈 때** — 막대+숫자 → 숫자만 순으로 줄여 보고, 그래도 안 들어가면 정책대로: «한 항목씩 자동 슬라이드»(기본, 주기 = 슬라이드 주기) / «숫자만 + 오른쪽 잘라 …» / «접기 ›». 임시 조절이라 설정은 바뀌지 않고, 공간이 다시 생기면 조용히 원래대로 돌아갑니다. 조절이 **시작되는 순간 트레이 알림 1회**, 미리보기 안내줄과 트레이 툴팁에 «자동 조절» 표시.
 - **표시 · 스타일 탭** — 프리셋 카드(미리보기 그림 포함) · 표시 방식 · 라벨 표시 · 막대 «자동/막대+숫자/숫자만» · 라벨 색 · 모델별 한도 표시. 맨 위 미리보기는 현재 폼 값을 그대로 그립니다(값이 없으면 예시값).
@@ -231,6 +232,7 @@ A tiny Windows utility that shows your **AI subscription usage (5-hour / weekly 
 
 - Two lines per entry (5h / weekly) with bars, percentages and the **local reset time**; entry = service × account, several accounts per service supported.
 - **Display modes**: all entries at once / switch on click / auto slide (interval; pauses while the mouse is over the bar and restarts the full interval on leave) / pin one. Per-entry order, label, and which windows to show.
+- **Carousel**: in «switch on click» / «auto slide» the whole entry is the click target (click = next). Page dots `● ○ ○` sit at the left edge (current one bright; click a dot to jump, hover for «2/3 · Codex work»); switchable to a left ⇄ button or none.
 - **Position**: «fixed left» (default) stays in the first gap after the widgets / Start button and never jumps to another gap; «auto» picks the left-most gap that fits. **When it doesn't fit**: bars → numbers, then the chosen policy — auto slide one entry at a time (default) / numbers only with the right clipped (…) / collapse to ›. Temporary (settings untouched), reverts silently when space returns, one tray notification when it kicks in.
 - **Only what matters on the bar**: service, account, folder, plan and last fetch appear in a **hover card** (service chip, mini bars per window, plan chip) with the hovered entry highlighted — not on the bar itself.
 - **No overlap with the weather widget**: its exact edge is read via UI Automation (in-process COM, no external process) with a 28px gap; the bar re-measures every 20s and checks every 2s whether something slid under its edges, moving at once.
