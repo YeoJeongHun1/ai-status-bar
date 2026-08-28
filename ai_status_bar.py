@@ -28,20 +28,25 @@ from datetime import datetime
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import applog                                                             # noqa: E402
+import polling                                                            # noqa: E402
 import taskbar as tb                                                      # noqa: E402
 from i18n import LANG_NAMES, SUPPORTED, set_language, t, tr_error         # noqa: E402
 from providers import all_providers, color_for, draw_icon, fmt_reset, get as get_provider, summary  # noqa: E402
 from providers import claude_code as cc                                   # noqa: E402
+from version import __version__                                           # noqa: E402
 
-__version__ = "1.1.0"
 APP_TITLE = "AI Status Bar"
 APP_NAME = "AIStatusBar"                          # exe 이름 · 설정 폴더 이름
 REPO_URL = "https://github.com/YeoJeongHun1/ai-status-bar"
 README_URL = REPO_URL + "#readme"
 SUPPORT_URL = "https://github.com/sponsors/YeoJeongHun1"
 
-POLL_SEC = int(os.environ.get("AI_STATUS_BAR_POLL_SEC", "300"))   # API 모드 조회 주기
+# API 모드 조회 주기 — 환경변수로 줄일 수 있지만 60초 밑으로는 못 내린다 (0·음수·문자면 300). 비공식 API 에 남의 토큰으로 폭주하지 않게.
+POLL_SEC = polling.clamp_poll_sec(os.environ.get("AI_STATUS_BAR_POLL_SEC"))
 OFFICIAL_POLL_SEC = 30                                            # 공식 모드는 로컬 파일만 읽으므로 자주 봐도 된다
+OVERFLOW_SLACK = 40                                               # 자동 조절에서 «모두 동시에» 로 복귀하려면 이만큼(px) 여유가 있어야 한다 (경계 진동 방지)
+OVERFLOW_NOTIFY_GAP_SEC = 600                                     # 자동 조절 알림은 마지막 알림 후 10분 안엔 다시 띄우지 않는다
 ALERT_STEPS = (80, 95)
 MARGIN = 16             # 빈 구간 양끝에서 띄우는 여백(px, DPI 배율 전 기준)
 REMEASURE_SEC = 20      # 아무 변화 없어도 이 주기로 다시 잰다 (위젯 문구가 길어지는 것 등 — 캡처 제외라 깜빡임 없음)
@@ -153,9 +158,28 @@ def load_settings():
 
 
 def save_settings(s):
+    """원자적으로 쓴다(tmp → replace) — 쓰는 도중 꺼져도 반쪽짜리 설정 파일이 남지 않게."""
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+    tmp = SETTINGS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(s, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, SETTINGS_PATH)
+
+
+def enabled_entries_of(settings):
+    """설정 dict 만 보고 켜진 항목을 고른다 — 폴링 스레드용 (미리보기 오버라이드를 절대 읽지 않는다)."""
+    out = []
+    official = settings["data_source"] == "official"
+    for e in settings["entries"]:
+        if not e["enabled"]:
+            continue
+        p = get_provider(e["provider"])
+        if not p:
+            continue
+        if official and not p.supports_official and settings["official_hide_unsupported"]:
+            continue
+        out.append(e)
+    return out
 
 
 def merge_discovered(entries, providers=None):
@@ -176,8 +200,8 @@ def migrate_old_shortcut():
         try:
             os.remove(OLD_STARTUP_LNK)
             set_autostart(True)
-        except Exception:
-            pass
+        except Exception as e:
+            applog.warn("migrate_old_shortcut", e)
 
 
 # ---------- 위젯 ----------
@@ -200,7 +224,12 @@ class StatusBar:
         self.root.attributes("-topmost", True)
         self.root.attributes("-toolwindow", True)     # 작업 표시줄 버튼("tk")을 만들지 않는다
         self.root.tk.call("tk", "scaling", self.scale * 96 / 72)
-        self.data = {}                                # entry key -> {"usage", "error", "last_ok", "saved_at"}
+        applog.install_crash_handlers(self.root)      # --windowed 빌드에서 사라지던 예외를 logs\error.log 로
+        self.data = {}                                # entry key -> {"usage", "error", "last_ok", "saved_at", "next_try"}
+        self.backoff = polling.Backoff()              # 계정별 429/5xx/네트워크 오류 지수 백오프
+        self.debounce = polling.Debounce()            # 수동 새로고침 연타 흡수 (10초)
+        self._refresh_lock = threading.Lock()         # 인플라이트 락 — 조회가 도는 동안 또 시작하지 않는다
+        self.last_overflow_notify = None              # 자동 조절 알림 마지막 시각 (10분 안 재알림 금지)
         self.cur = 0                                  # click/slide 모드에서 지금 보이는 항목 번호
         self.cycle_job = None
         self.alerted = {}
@@ -289,7 +318,7 @@ class StatusBar:
         m = tk.Menu(self.root, tearoff=0)
         m.add_command(label=t("menu_settings"), command=self.open_settings)
         m.add_command(label=t("menu_next"), command=self.next_entry)
-        m.add_command(label=t("menu_refresh"), command=self.refresh_async)
+        m.add_command(label=t("menu_refresh"), command=lambda: self.refresh_async(manual=True))
         m.add_command(label=t("menu_remeasure"), command=lambda: self.relayout(force=True))
         for p in PROVIDERS:
             m.add_command(label=t("menu_usage_page", name=p.name), command=lambda p=p: webbrowser.open(p.usage_page))
@@ -405,7 +434,7 @@ class StatusBar:
             pystray.Menu.SEPARATOR,
             M(lambda _: t("menu_settings"), lambda: self.call_soon(self.open_settings), default=True),
             M(lambda _: t("menu_next"), lambda: self.call_soon(self.next_entry)),
-            M(lambda _: t("menu_refresh"), lambda: self.call_soon(self.refresh_async)),
+            M(lambda _: t("menu_refresh"), lambda: self.call_soon(lambda: self.refresh_async(manual=True))),
             M(lambda _: t("menu_readme"), lambda: webbrowser.open(README_URL)),
             pystray.Menu.SEPARATOR,
             M(lambda _: t("menu_quit"), lambda: self.call_soon(self.quit)),
@@ -439,8 +468,8 @@ class StatusBar:
             prefix = t("tray_auto_prefix") if self.auto_adjusted else ""
             self.tray.title = f"{prefix}{APP_TITLE} — {self.tray_status()}"[:127]
             self.tray.update_menu()
-        except Exception:
-            pass
+        except Exception as e:
+            applog.warn("update_tray", e)
 
     # --- 색: 배경 밝기에 따라 글자색을 고른다 (다크/라이트 작업 표시줄 둘 다) ---
     def set_palette(self, bg):
@@ -506,26 +535,27 @@ class StatusBar:
             return []
         return self.gaps[:1] if self.settings["placement"] == "left" else list(self.gaps)
 
-    def try_fit(self, modes):
-        """모드들을 순서대로 그려 보고 들어가는 첫 (mode, gap, need) — 없으면 None."""
+    def try_fit(self, modes, slack=0):
+        """모드들을 순서대로 그려 보고 들어가는 첫 (mode, gap, need) — 없으면 None. slack 은 요구 여유(px)."""
         for mode in modes:
             self.mode = mode
             need = self.draw()
             for g in self.candidate_gaps():
-                if g[1] - g[0] >= need:
+                if g[1] - g[0] >= need + slack:
                     return mode, g, need
         return None
 
     def place_and_draw(self):
         """설정대로 들어가면 그대로. 안 들어가면 overflow_policy 대로 임시 조절하고(설정 파일은 그대로) 알림 1회.
-        다시 들어가면 조용히 원래대로. 필요한 폭을 돌려준다."""
+        다시 들어가면 조용히 원래대로 — 단 «여유 OVERFLOW_SLACK px 이상» 일 때만 복귀해 경계값에서 왔다 갔다 하지 않는다.
+        알림은 마지막 알림 후 OVERFLOW_NOTIFY_GAP_SEC 안에는 다시 띄우지 않는다. 필요한 폭을 돌려준다."""
         m = int(MARGIN * self.scale)
         self.clip_w = None
         self.gap = self.gaps[0] if self.gaps else (m, m + self.px(24))
         before = self.auto_adjusted
         self.auto_adjusted = None                                   # 먼저 원래 설정으로 시도
         shrink = [x for x in self.tiers() if x != "collapsed"]
-        fit = self.try_fit(shrink)
+        fit = self.try_fit(shrink, slack=self.px(OVERFLOW_SLACK) if before else 0)
         if fit is None and self.gaps:
             policy = self.settings["overflow_policy"]
             multi = self.settings["display_mode"] == "all" and len(self.enabled_entries()) > 1
@@ -554,7 +584,10 @@ class StatusBar:
             self.schedule_cycle()
             self.update_tray()
             if self.auto_adjusted and (before is None or before != self.auto_adjusted):
-                self.notify(t(f"notify_overflow_{self.auto_adjusted}"))
+                now = datetime.now()
+                if self.last_overflow_notify is None or (now - self.last_overflow_notify).total_seconds() >= OVERFLOW_NOTIFY_GAP_SEC:
+                    self.last_overflow_notify = now
+                    self.notify(t(f"notify_overflow_{self.auto_adjusted}"))
             if self.settings_win:
                 self.preview_dirty()
         return need
@@ -584,8 +617,8 @@ class StatusBar:
                 self.relayout(force=True)              # 위젯 문구가 길어져 우리 밑으로 들어옴 → 즉시 자리 옮김
             else:
                 tb.raise_topmost(self.hwnd)
-        except Exception:
-            pass
+        except Exception as e:
+            applog.warn("watch", e)
         self.root.after(2000, self.watch)
 
     def something_under_edges(self):
@@ -609,24 +642,37 @@ class StatusBar:
         self.refresh_async()
         self.root.after(self.poll_ms(), self.tick)
 
-    def refresh_async(self):
+    def refresh_async(self, manual=False):
+        """조회를 백그라운드에서 한 번. 이미 도는 중이면 무시(인플라이트 락), 수동 요청은 10초 디바운스.
+        바 클릭 연타·메뉴 연타가 계정 수만큼 인증 요청으로 번지지 않게."""
+        if manual and not self.debounce.allow():
+            return False
+        if self._refresh_lock.locked():
+            return False
         threading.Thread(target=self._refresh, daemon=True).start()
+        return True
 
     def _refresh(self):
-        official = self.official()          # 공식 모드는 네트워크 코드를 한 줄도 타지 않는다 (fetch 미호출)
-        for e in list(self.enabled_entries()):
-            p = get_provider(e["provider"])
-            d = self.data.setdefault(entry_key(e), {"usage": None, "error": None, "last_ok": None, "saved_at": None})
-            try:
+        """폴링 스레드. **저장된 설정(self.settings)만** 읽는다 — 설정 창 미리보기의 임시 오버라이드(_ov)는 절대 보지 않는다.
+        공식 모드는 네트워크 코드를 한 줄도 타지 않는다 (fetch 미호출). 결과 반영은 메인 스레드(after_refresh)에서."""
+        if not self._refresh_lock.acquire(blocking=False):
+            return
+        try:
+            settings = self.settings
+            official = settings["data_source"] == "official"
+            entries = list(enabled_entries_of(settings))
+
+            def fetch(e):
+                p = get_provider(e["provider"])
                 if official:
-                    d["usage"], d["saved_at"] = p.fetch_official(e["path"])
-                else:
-                    d["usage"] = p.fetch(e["path"])
-                    d["saved_at"] = None
-                d["error"] = None
-                d["last_ok"] = d["usage"]["fetched_at"]
-            except Exception as ex:
-                d["error"] = str(ex)[:80]
+                    return p.fetch_official(e["path"])
+                return p.fetch(e["path"]), None
+
+            polling.run_refresh(entries, fetch, self.data, self.backoff, key_of=entry_key)
+        except Exception as ex:
+            applog.warn("_refresh", ex)
+        finally:
+            self._refresh_lock.release()
         self.call_soon(self.after_refresh)
 
     def after_refresh(self):
@@ -833,7 +879,7 @@ class StatusBar:
         elif self.switchable():
             self.next_entry()
         elif self.mode == "full":
-            self.refresh_async()
+            self.refresh_async(manual=True)
         else:
             self.toggle_popup()
 
@@ -975,6 +1021,8 @@ class StatusBar:
                 lines.append(f"{s_['model']} {s_['pct']:.0f}% " + t("tt_scoped"))
         if d.get("error"):
             lines.append(t("tt_error", err=tr_error(d["error"])))
+            if d.get("next_try"):
+                lines.append(t("tt_next_try", time=d["next_try"].strftime("%H:%M")))
         elif self.official() and d.get("saved_at"):
             age = int((datetime.now() - d["saved_at"]).total_seconds() // 60)
             lines.append(t("tt_official_ago", m=age) if age >= 1 else t("tt_official"))
@@ -1058,8 +1106,10 @@ class StatusBar:
                     x = self.chip(c, x, y, f"{s_['model']} {s_['pct']:.0f}%", "#333333", fg=self.rgb(color_for(s_["pct"]))) + self.px(6)
                 y += line
         else:
-            c.create_text(pad, y, text=t("tt_error", err=tr_error(d["error"])) if d.get("error") else t("tt_loading"),
-                          fill="#e0a030" if d.get("error") else "#9a9a9a", font=self.font(9), anchor="w")
+            msg = t("tt_error", err=tr_error(d["error"])) if d.get("error") else t("tt_loading")
+            if d.get("error") and d.get("next_try"):
+                msg += "  " + t("tt_next_try", time=d["next_try"].strftime("%H:%M"))
+            c.create_text(pad, y, text=msg, fill="#e0a030" if d.get("error") else "#9a9a9a", font=self.font(9), anchor="w")
             y += line
         # 마지막 줄: 플랜 칩 + 조회/오류/공식
         x = pad
@@ -1070,7 +1120,10 @@ class StatusBar:
         if plan:
             x = self.chip(c, x, y, str(plan), "#2f3b52", fg="#cfe0ff") + self.px(8)
         if d.get("error") and u:
-            c.create_text(x, y, text=t("tt_error", err=tr_error(d["error"])), fill="#e0a030", font=self.font(8), anchor="w")
+            msg = t("tt_error", err=tr_error(d["error"]))
+            if d.get("next_try"):
+                msg += "  " + t("tt_next_try", time=d["next_try"].strftime("%H:%M"))
+            c.create_text(x, y, text=msg, fill="#e0a030", font=self.font(8), anchor="w")
         elif self.official() and d.get("saved_at"):
             age = int((datetime.now() - d["saved_at"]).total_seconds() // 60)
             c.create_text(x, y, text=t("tt_official_ago", m=age) if age >= 1 else t("tt_official"), fill="#9a9a9a", font=self.font(8), anchor="w")
@@ -1339,6 +1392,9 @@ class StatusBar:
         self.preview_hint.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
         ttk.Label(top, text=t("preview_note"), foreground="#808080", font=("Segoe UI", 8), wraplength=self.px(700), justify="left").grid(
             row=4, column=0, columnspan=2, sticky="w")
+        if install_mode:                                   # 첫 실행: 약관·자기 책임 고지를 처음부터 보이게
+            ttk.Label(top, text=t("tos_note"), foreground="#a05020", font=("Segoe UI", 8), wraplength=self.px(700), justify="left").grid(
+                row=5, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         nb = ttk.Notebook(w)
         nb.pack(fill="both", expand=True, padx=14, pady=(6, 0))
@@ -1575,7 +1631,7 @@ class StatusBar:
         row = self.section(f, "sec_status", row + 3)
         self.status_label = ttk.Label(f, text="", justify="left", foreground="#404040", font=("Segoe UI", 9), wraplength=self.px(680))
         self.status_label.grid(row=row, column=0, columnspan=4, sticky="w")
-        ttk.Button(f, text=t("btn_recheck"), command=self.refresh_async).grid(row=row + 1, column=0, sticky="w", pady=(8, 0))
+        ttk.Button(f, text=t("btn_recheck"), command=lambda: self.refresh_async(manual=True)).grid(row=row + 1, column=0, sticky="w", pady=(8, 0))
         self.fill_status()
         ttk.Label(f, text=t("unofficial_note"), foreground="#808080", font=("Segoe UI", 8), justify="left", wraplength=self.px(690)).grid(
             row=row + 2, column=0, columnspan=4, sticky="w", pady=(14, 0))
@@ -1607,11 +1663,26 @@ class StatusBar:
             lk = ttk.Label(links, text=t(key), foreground="#0a66c2", cursor="hand2")
             lk.pack(anchor="w", pady=(0, 3))
             lk.bind("<Button-1>", lambda e, u=url: webbrowser.open(u))
-        ttk.Button(f, text=t("btn_why_missing"), command=self.open_help).grid(row=row + 4, column=0, sticky="w", pady=(8, 0))
-        ttk.Label(f, text=t("unofficial_note"), foreground="#808080", font=("Segoe UI", 8), justify="left", wraplength=self.px(690)).grid(
+        bts = ttk.Frame(f)
+        bts.grid(row=row + 4, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        ttk.Button(bts, text=t("btn_why_missing"), command=self.open_help).pack(side="left")
+        ttk.Button(bts, text=t("btn_open_logs"), command=self.open_logs).pack(side="left", padx=(6, 0))
+        ttk.Label(f, text=t("tos_note"), foreground="#a05020", font=("Segoe UI", 8), justify="left", wraplength=self.px(690)).grid(
             row=row + 5, column=0, columnspan=4, sticky="w", pady=(14, 0))
+        ttk.Label(f, text=t("about_remove"), foreground="#606060", font=("Segoe UI", 8), justify="left", wraplength=self.px(690)).grid(
+            row=row + 6, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Label(f, text=t("unofficial_note"), foreground="#808080", font=("Segoe UI", 8), justify="left", wraplength=self.px(690)).grid(
+            row=row + 7, column=0, columnspan=4, sticky="w", pady=(6, 0))
         ttk.Label(f, text=t("trademark_note"), foreground="#808080", font=("Segoe UI", 8), justify="left", wraplength=self.px(690)).grid(
-            row=row + 6, column=0, columnspan=4, sticky="w", pady=(4, 0))
+            row=row + 8, column=0, columnspan=4, sticky="w", pady=(4, 0))
+
+    def open_logs(self):
+        """오류 로그 폴더를 탐색기로 연다 (없으면 만든다). 이슈에 첨부할 error.log 가 여기 있다."""
+        try:
+            os.makedirs(applog.LOG_DIR, exist_ok=True)
+            os.startfile(applog.LOG_DIR)
+        except Exception as e:
+            applog.warn("open_logs", e)
 
     # --- 항목 조작 ---
     def toggle_statusline(self, r):
@@ -1702,6 +1773,8 @@ class StatusBar:
                 s = t("status_disconnected", label=e["label"], name=p.name, reason=tr_error(info["reason"]))
             if d.get("error"):
                 s += t("status_error", err=tr_error(d["error"]))
+                if d.get("next_try"):
+                    s += " " + t("tt_next_try", time=d["next_try"].strftime("%H:%M"))
             elif d.get("last_ok"):
                 s += t("status_last_ok", time=d["last_ok"].strftime("%H:%M:%S"))
             if p.supports_official and cc.statusline_installed(e["path"]):
@@ -1802,8 +1875,8 @@ class StatusBar:
         if self.tray:
             try:
                 self.tray.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                applog.warn("tray.stop", e)
         self.root.destroy()
 
     def run(self):
@@ -1860,9 +1933,19 @@ def first_run():
         try:
             save_settings(load_settings())
             return False
-        except Exception:
-            pass
+        except Exception as e:
+            applog.warn("first_run migrate", e)
     return True
+
+
+def unlink_statusline_all():
+    """--unlink-statusline: 설정에 있는 Claude Code 계정 폴더 전부에서 상태줄 연결을 해제한다 (폴더 삭제 전에 실행).
+    settings.json 이 없어도 자동 탐색한 폴더를 본다."""
+    s = load_settings()
+    dirs = [e["path"] for e in s["entries"] if e["provider"] == "claude_code"]
+    if not dirs:
+        dirs = get_provider("claude_code").discover()
+    return cc.unlink_all(dirs)
 
 
 if __name__ == "__main__":
@@ -1871,6 +1954,9 @@ if __name__ == "__main__":
         sys.exit(0)
     if "--no-autostart" in sys.argv:
         set_autostart(False)
+        sys.exit(0)
+    if "--unlink-statusline" in sys.argv:   # 제거 전: 계정 폴더 settings.json 의 statusLine 을 원래대로
+        unlink_statusline_all()
         sys.exit(0)
     if not single_instance():
         sys.exit(0)

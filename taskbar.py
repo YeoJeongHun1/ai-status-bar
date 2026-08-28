@@ -231,6 +231,29 @@ def _vt(obj, idx, restype, *argtypes):
     return ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(vtbl[idx])
 
 
+_IID_IUIAutomationElement = "{d22108aa-8ac5-49a5-837b-37bbb3d7591e}"
+
+# vtable 인덱스 — UIAutomationClient.h 의 메서드 선언 순서 (IUnknown 3개 뒤부터). 인덱스가 어긋나면 프로세스가 죽을 수 있으므로
+# (a) QueryInterface 로 «정말 이 인터페이스인가» 를 확인하고 (b) 결과를 다른 프로퍼티(AutomationId)로 교차 검증한 뒤에만 믿는다.
+# IUIAutomation: 3 CompareElements · 4 CompareRuntimeIds · 5 GetRootElement · 6 ElementFromHandle · 7 ElementFromPoint ·
+#   8 GetFocusedElement · 9 GetRootElementBuildCache · 10 ElementFromHandleBuildCache · 11 ElementFromPointBuildCache ·
+#   12 GetFocusedElementBuildCache · 13 CreateTreeWalker · 14 get_ControlViewWalker · 15 get_ContentViewWalker · 16 get_RawViewWalker ·
+#   17 get_RawViewCondition · 18 get_ControlViewCondition · 19 get_ContentViewCondition · 20 CreateCacheRequest ·
+#   21 CreateTrueCondition · 22 CreateFalseCondition · 23 CreatePropertyCondition
+# IUIAutomationElement: 3 SetFocus · 4 GetRuntimeId · 5 FindFirst · 6 FindAll · 7 FindFirstBuildCache · 8 FindAllBuildCache ·
+#   9 BuildUpdatedCache · 10 GetCurrentPropertyValue · 11 GetCurrentPropertyValueEx · 12 GetCachedPropertyValue ·
+#   13 GetCachedPropertyValueEx · 14 GetCurrentPatternAs · 15 GetCachedPatternAs · 16 GetCurrentPattern · 17 GetCachedPattern ·
+#   18 GetCachedParent · 19 GetCachedChildren · 20 get_CurrentProcessId · 21 get_CurrentControlType ·
+#   22 get_CurrentLocalizedControlType · 23 get_CurrentName · 24 get_CurrentAcceleratorKey · 25 get_CurrentAccessKey ·
+#   26 get_CurrentHasKeyboardFocus · 27 get_CurrentIsKeyboardFocusable · 28 get_CurrentIsEnabled · 29 get_CurrentAutomationId ·
+#   30 get_CurrentClassName · 31 get_CurrentHelpText · 32 get_CurrentCulture · 33 get_CurrentIsControlElement ·
+#   34 get_CurrentIsContentElement · 35 get_CurrentIsPassword · 36 get_CurrentNativeWindowHandle · 37 get_CurrentItemType ·
+#   38 get_CurrentIsOffscreen · 39 get_CurrentOrientation · 40 get_CurrentFrameworkId · 41 get_CurrentIsRequiredForForm ·
+#   42 get_CurrentItemStatus · 43 get_CurrentBoundingRectangle
+_UIA_ElementFromHandle, _UIA_CreatePropertyCondition = 6, 23
+_EL_FindFirst, _EL_get_CurrentAutomationId, _EL_get_CurrentBoundingRectangle = 5, 29, 43
+
+
 def _release(obj):
     try:
         if obj:
@@ -239,48 +262,80 @@ def _release(obj):
         pass
 
 
+def _query_interface(obj, iid_str):
+    """IUnknown::QueryInterface(0) 로 그 IID 를 정말 구현하는지 확인. 성공하면 얻은 참조를 바로 Release 하고 True."""
+    try:
+        iid = _GUID()
+        ctypes.windll.ole32.CLSIDFromString(iid_str, ctypes.byref(iid))
+        out = ctypes.c_void_p()
+        hr = _vt(obj, 0, ctypes.HRESULT, ctypes.POINTER(_GUID), ctypes.POINTER(ctypes.c_void_p))(obj, ctypes.byref(iid), ctypes.byref(out))
+        if hr == 0 and out:
+            _release(out)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def widgets_button_right():
-    """작업 표시줄 왼쪽 위젯(날씨) 버튼의 오른쪽 x (화면 좌표). 없거나 실패하면 None. ~20ms.
-    vtable 인덱스: IUIAutomation.ElementFromHandle=6, CreatePropertyCondition=23 ·
-    IUIAutomationElement.FindFirst=5, get_CurrentBoundingRectangle=43 (UIAutomationClient.h 순서)."""
+    """작업 표시줄 왼쪽 위젯(날씨) 버튼의 오른쪽 x (화면 좌표). 없거나 조금이라도 의심스러우면 None → 호출자는 픽셀 결과만 쓴다. ~20ms.
+    안전장치: QueryInterface 로 IUIAutomation / IUIAutomationElement 확인 → AutomationId 가 'WidgetsButton' 인지 되읽어 vtable 이
+    맞는지 교차 검증 → 사각형이 작업 표시줄 안·폭 0<w<600 인지 확인. CoInitialize 는 CoUninitialize 와 짝, COM 참조는 전부 Release."""
     ole32, oleaut32 = ctypes.windll.ole32, ctypes.windll.oleaut32
     uia = root = cond = el = None
+    bstr = None
+    co_init = False
     try:
-        ole32.CoInitialize(None)
+        hr = ole32.CoInitialize(None)
+        co_init = hr in (0, 1)                                       # S_OK / S_FALSE 만 Uninitialize 짝을 맞춘다
         clsid, iid = _GUID(), _GUID()
         ole32.CLSIDFromString(_CLSID_CUIAutomation, ctypes.byref(clsid))
         ole32.CLSIDFromString(_IID_IUIAutomation, ctypes.byref(iid))
         uia = ctypes.c_void_p()
         if ole32.CoCreateInstance(ctypes.byref(clsid), None, 1, ctypes.byref(iid), ctypes.byref(uia)) != 0 or not uia:
             return None
+        if not _query_interface(uia, _IID_IUIAutomation):
+            return None
         root = ctypes.c_void_p()
-        if _vt(uia, 6, ctypes.HRESULT, wintypes.HWND, ctypes.POINTER(ctypes.c_void_p))(uia, taskbar(), ctypes.byref(root)) != 0 or not root:
+        if _vt(uia, _UIA_ElementFromHandle, ctypes.HRESULT, wintypes.HWND, ctypes.POINTER(ctypes.c_void_p))(uia, taskbar(), ctypes.byref(root)) != 0 or not root:
+            return None
+        if not _query_interface(root, _IID_IUIAutomationElement):
             return None
         v = _VARIANT()
         v.vt = 8                                                    # VT_BSTR
         oleaut32.SysAllocString.restype = ctypes.c_void_p
         v.val = oleaut32.SysAllocString("WidgetsButton")
         cond = ctypes.c_void_p()
-        _vt(uia, 23, ctypes.HRESULT, ctypes.c_int, _VARIANT, ctypes.POINTER(ctypes.c_void_p))(uia, UIA_AutomationIdPropertyId, v, ctypes.byref(cond))
+        _vt(uia, _UIA_CreatePropertyCondition, ctypes.HRESULT, ctypes.c_int, _VARIANT, ctypes.POINTER(ctypes.c_void_p))(uia, UIA_AutomationIdPropertyId, v, ctypes.byref(cond))
         oleaut32.SysFreeString(ctypes.c_void_p(v.val))
         if not cond:
             return None
         el = ctypes.c_void_p()
-        _vt(root, 5, ctypes.HRESULT, ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p))(root, TreeScope_Descendants, cond, ctypes.byref(el))
-        if not el:
+        _vt(root, _EL_FindFirst, ctypes.HRESULT, ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p))(root, TreeScope_Descendants, cond, ctypes.byref(el))
+        if not el or not _query_interface(el, _IID_IUIAutomationElement):
+            return None
+        # 교차 검증: 같은 vtable 로 AutomationId 를 되읽어 'WidgetsButton' 이 나와야 인덱스가 맞다고 본다
+        bstr = ctypes.c_void_p()
+        if _vt(el, _EL_get_CurrentAutomationId, ctypes.HRESULT, ctypes.POINTER(ctypes.c_void_p))(el, ctypes.byref(bstr)) != 0 or not bstr:
+            return None
+        if ctypes.wstring_at(bstr.value) != "WidgetsButton":
             return None
         r = wintypes.RECT()
-        if _vt(el, 43, ctypes.HRESULT, ctypes.POINTER(wintypes.RECT))(el, ctypes.byref(r)) != 0:
+        if _vt(el, _EL_get_CurrentBoundingRectangle, ctypes.HRESULT, ctypes.POINTER(wintypes.RECT))(el, ctypes.byref(r)) != 0:
             return None
         left, top, right, bottom = win_rect(taskbar())
-        if r.right <= r.left or r.right - r.left > 600 or not (left <= r.left < right):   # 말이 안 되는 값은 버린다
-            return None
+        if r.right <= r.left or r.right - r.left > 600 or not (left <= r.left < right) or not (top - 4 <= r.top <= bottom):
+            return None                                             # 말이 안 되는 값은 버린다
         return int(r.right)
     except Exception:
         return None
     finally:
+        if bstr and bstr.value:
+            oleaut32.SysFreeString(bstr)
         for o in (el, cond, root, uia):
             _release(o)
+        if co_init:
+            ole32.CoUninitialize()
 
 
 def message_box(text, title, flags=0x40):
