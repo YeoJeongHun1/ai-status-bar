@@ -135,10 +135,42 @@ def measure_free_gaps(min_width):
     return gaps, bg
 
 
+WS_EX_TOPMOST = 0x00000008
+WANT_EXSTYLE = WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST
+
+
 def make_toolwindow(hwnd):
-    """작업 표시줄 버튼 없음 + 포커스 안 뺏음."""
+    """작업 표시줄 버튼 없음 + 포커스 안 뺏음 + 항상 위."""
     ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-    user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
+    user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WANT_EXSTYLE)
+
+
+def ensure_exstyle(hwnd):
+    """tk 가 -transparentcolor/-topmost/deiconify 때 ex-style 을 다시 써서 빠졌으면 되돌린다. 바뀌었으면 True."""
+    ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE) & 0xFFFFFFFF
+    if ex & WANT_EXSTYLE == WANT_EXSTYLE:
+        return False
+    user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WANT_EXSTYLE)
+    return True
+
+
+def cursor_point():
+    pt = wintypes.POINT()
+    user32.GetCursorPos(ctypes.byref(pt))
+    return (pt.x, pt.y)
+
+
+def cursor_over(hwnd):
+    """지금 커서가 이 창 위에 있나 — 창 리사이즈가 만드는 «가짜 Leave» 를 걸러내는 데 쓴다."""
+    pt = wintypes.POINT()
+    user32.GetCursorPos(ctypes.byref(pt))
+    l, t, r, b = win_rect(hwnd)
+    return l <= pt.x < r and t <= pt.y < b
+
+
+def resize(hwnd, w, h):
+    """위치 그대로 크기만 (활성화 없음, 항상 위 유지)."""
+    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, w, h, SWP_NOMOVE | SWP_NOACTIVATE)
 
 
 def exclude_from_capture(hwnd):
