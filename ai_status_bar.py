@@ -9,7 +9,8 @@ AI Status Bar — Windows 작업 표시줄의 **빈 공간**에 AI 구독 사용
 - 우리 창은 캡처에서 제외(WDA_EXCLUDEFROMCAPTURE)돼 재측정 때 숨기지 않는다 → 깜빡이지 않는다.
 - 전체화면 앱이 앞에 있으면 숨긴다. 트레이 '^' 안에 아이콘(설정·새로고침·종료). 작업 표시줄 버튼은 없다.
 - 항목(entry) = 제공자 × 계정. 표시 방식: 모두 동시에 / 클릭으로 전환 / 자동 슬라이드 / 하나 고정.
-- 스타일: 제공자 배지·라벨 on/off, 막대 «자동/막대+숫자/숫자만», 배지·라벨 색.
+- 바에는 «필요한 정보만»: 5h/7d 막대·%·리셋 시각. 서비스·계정·플랜·마지막 조회는 **마우스를 올리면 툴팁** 으로.
+- 스타일: 계정 라벨 on/off(기본 off), 막대 «자동/막대+숫자/숫자만», 라벨 색. 설정 창에 라이브 미리보기 + 프리셋.
 - 데이터 원본: 비공식 API (5분마다) / 공식 모드 (Claude Code 상태줄 데이터만, 네트워크 0).
 - 다국어: ko · en · ja · pt-BR · es (i18n.py). 설정은 %LOCALAPPDATA%\\AIStatusBar\\settings.json.
 
@@ -32,7 +33,7 @@ from i18n import LANG_NAMES, SUPPORTED, set_language, t, tr_error         # noqa
 from providers import all_providers, color_for, draw_icon, fmt_reset, get as get_provider, summary  # noqa: E402
 from providers import claude_code as cc                                   # noqa: E402
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 APP_TITLE = "AI Status Bar"
 APP_NAME = "AIStatusBar"                          # exe 이름 · 설정 폴더 이름
 REPO_URL = "https://github.com/YeoJeongHun1/ai-status-bar"
@@ -66,7 +67,7 @@ DEFAULT_SETTINGS = {
     "slide_sec": 30,
     "fixed_entry": "",           # "provider|path"
     "show_scoped": True,         # 모델별 한도 (Claude: Fable 등)
-    "style": {"badge": True, "label": True, "bars": "auto", "badge_color": "", "label_color": ""},
+    "style": {"label": False, "bars": "auto", "label_color": ""},
     "language": "auto",
     "data_source": "api",        # api = 비공식 API / official = 상태줄 데이터만 (네트워크 0)
     "official_hide_unsupported": True,
@@ -106,13 +107,11 @@ def load_settings():
     if "show_scoped" in raw:
         s["show_scoped"] = bool(raw["show_scoped"])
     st = raw.get("style") or {}
-    s["style"]["badge"] = bool(st.get("badge", True))
-    s["style"]["label"] = bool(st.get("label", True))
+    s["style"]["label"] = bool(st.get("label", False))          # v1.0 의 badge/mark 키는 버린다 (마크는 더 쓰지 않는다)
     if st.get("bars") in BAR_STYLES:
         s["style"]["bars"] = st["bars"]
-    for k in ("badge_color", "label_color"):
-        v = st.get(k) or ""
-        s["style"][k] = v if isinstance(v, str) and v.startswith("#") and len(v) == 7 else ""
+    v = st.get("label_color") or ""
+    s["style"]["label_color"] = v if isinstance(v, str) and v.startswith("#") and len(v) == 7 else ""
     if raw.get("language") in ("auto",) + SUPPORTED:
         s["language"] = raw["language"]
     if raw.get("data_source") in ("api", "official"):
@@ -193,6 +192,7 @@ class StatusBar:
         self.popup = None
         self.settings_win = None
         self.help_win = None
+        self._ov = None                               # 미리보기용 오버라이드 {"settings","entries","data"}
         self.mode = "full"
         self.signature = None
         self.gap = (0, 0)
@@ -209,6 +209,13 @@ class StatusBar:
         self.canvas.pack()
         self.canvas.bind("<Button-1>", self.on_left)
         self.canvas.bind("<Button-3>", self.on_right)
+        self.canvas.bind("<Motion>", self.on_motion)
+        self.canvas.bind("<Leave>", self.on_leave)
+        self.tooltip = None
+        self.tooltip_job = None
+        self.tooltip_entry = None
+        self.entry_spans = []                          # [(x0, x1, entry)] — 툴팁 히트 테스트용
+        self._tags = ()
         self.menu = self.build_menu()
 
         self.root.withdraw()
@@ -235,8 +242,12 @@ class StatusBar:
         self.root.after(self.poll_ms(), self.tick)
         self.root.after(REMEASURE_SEC * 1000, self.periodic_measure)
 
+    def cfg(self):
+        """그리기에 쓰는 설정 — 미리보기 중이면 폼의 임시 설정."""
+        return self._ov["settings"] if self._ov else self.settings
+
     def official(self):
-        return self.settings["data_source"] == "official"
+        return self.cfg()["data_source"] == "official"
 
     def poll_ms(self):
         return (OFFICIAL_POLL_SEC if self.official() else POLL_SEC) * 1000
@@ -259,13 +270,14 @@ class StatusBar:
     # --- 항목 ---
     def enabled_entries(self):
         out = []
-        for e in self.settings["entries"]:
+        S = self.cfg()
+        for e in (self._ov["entries"] if self._ov else S["entries"]):
             if not e["enabled"]:
                 continue
             p = get_provider(e["provider"])
             if not p:
                 continue
-            if self.official() and not p.supports_official and self.settings["official_hide_unsupported"]:
+            if self.official() and not p.supports_official and S["official_hide_unsupported"]:
                 continue
             out.append(e)
         return out
@@ -275,19 +287,22 @@ class StatusBar:
         ents = self.enabled_entries()
         if not ents:
             return []
-        mode = self.settings["display_mode"]
+        S = self.cfg()
+        mode = S["display_mode"]
         if mode == "fixed":
             for e in ents:
-                if entry_key(e) == self.settings["fixed_entry"]:
+                if entry_key(e) == S["fixed_entry"]:
                     return [e]
             return [ents[0]]
         if mode in ("click", "slide"):
+            if self._ov:
+                return [ents[0]]
             self.cur %= len(ents)
             return [ents[self.cur]]
         return ents
 
     def switchable(self):
-        return self.settings["display_mode"] in ("click", "slide") and len(self.enabled_entries()) > 1
+        return self.cfg()["display_mode"] in ("click", "slide") and len(self.enabled_entries()) > 1
 
     def next_entry(self):
         if self.switchable():
@@ -373,9 +388,9 @@ class StatusBar:
         self.line = "#505050" if dark else "#b0b0b0"
 
     # --- 배치 ---
-    def tiers(self):
+    def tiers(self, settings=None):
         return {"auto": ("full", "compact", "collapsed"), "bars": ("full", "collapsed"),
-                "numbers": ("compact", "collapsed")}[self.settings["style"]["bars"]]
+                "numbers": ("compact", "collapsed")}[(settings or self.settings)["style"]["bars"]]
 
     def relayout(self, force=False):
         """빈 공간을 (필요하면 다시) 재고, 들어가는 가장 큰 모드로 그린 뒤 그 자리에 놓는다."""
@@ -477,7 +492,7 @@ class StatusBar:
         return ("Segoe UI Semibold" if bold else "Segoe UI", size)
 
     def text(self, c, x, y, s, fill, font, gap=5, tags=()):
-        item = c.create_text(x, y, text=s, fill=fill, font=font, anchor="w", tags=tags)
+        item = c.create_text(x, y, text=s, fill=fill, font=font, anchor="w", tags=tags or self._tags)
         return c.bbox(item)[2] + self.px(gap)
 
     def entry_windows(self, e, usage):
@@ -494,26 +509,29 @@ class StatusBar:
         ents = entries if entries is not None else self.visible_entries()
         if not ents:
             return self.text(c, self.px(4), h // 2, t("bar_no_entries"), self.dim, self.font(9))
-        st = self.settings["style"]
-        many = len(self.enabled_entries()) > 1
+        st = self.cfg()["style"]
+        spans = []
         x = self.px(4)
         for i, e in enumerate(ents):
             if i:
                 c.create_line(x, self.px(8), x, h - self.px(8), fill=self.line)
                 x += self.px(10)
-            if st["badge"]:
-                x = self.text(c, x, h // 2, get_provider(e["provider"]).short, st["badge_color"] or self.dim,
-                              self.font(8), gap=5)
-            if st["label"] and many:
+            self._tags = (f"entry:{i}",)
+            x0 = x
+            if st["label"]:
                 x = self.text(c, x, h // 2, e["label"], st["label_color"] or self.fg, self.font(9, True), gap=7)
             x = self.draw_entry(c, x, h, e, mode)
+            spans.append((x0, x, e))
             x += self.px(6)
+        self._tags = ()
+        if c is self.canvas and self._ov is None:
+            self.entry_spans = spans
         if self.switchable():
             x = self.text(c, x, h // 2, "⇄", self.dim, self.font(13, True), gap=4, tags=("switch",))
         return x
 
     def draw_entry(self, c, x, h, e, mode):
-        d = self.data.get(entry_key(e)) or {}
+        d = (self._ov["data"] if self._ov else self.data).get(entry_key(e)) or {}
         u = d.get("usage")
         if not u:
             msg = f"⚠ {tr_error(d['error'])}" if d.get("error") else t("bar_loading")
@@ -524,7 +542,7 @@ class StatusBar:
             if age > cc.STALE_AFTER_SEC:
                 stale_min = int(age // 60)
         wins = self.entry_windows(e, u)
-        if not wins and not (self.settings["show_scoped"] and u["scoped"]):
+        if not wins and not (self.cfg()["show_scoped"] and u["scoped"]):
             return self.text(c, x, h // 2, t("bar_pick_items"), self.dim, self.font(9))
         ys = [h // 2] if len(wins) == 1 else [int(h * 0.28), int(h * 0.72)]
         right = x
@@ -533,7 +551,7 @@ class StatusBar:
         x = right + self.px(8) if wins else x
         if stale_min is not None:
             x = self.text(c, x, h // 2, t("stale_ago", m=stale_min), self.dim, self.font(9))
-        if self.settings["show_scoped"]:
+        if self.cfg()["show_scoped"]:
             for s in u["scoped"]:
                 x = self.text(c, x, h // 2, s["model"], self.dim, self.font(9), gap=3)
                 x = self.text(c, x, h // 2, f"{s['pct']:.0f}%", self.rgb(color_for(s["pct"])), self.font(11, True))
@@ -546,10 +564,10 @@ class StatusBar:
         x = self.text(c, x, y, w["key"], self.dim, self.font(9), gap=4)
         if mode == "full":
             bar_w, bar_h = self.px(90), self.px(7)
-            c.create_rectangle(x, y - bar_h // 2, x + bar_w, y + bar_h // 2, fill=self.track, outline="")
+            c.create_rectangle(x, y - bar_h // 2, x + bar_w, y + bar_h // 2, fill=self.track, outline="", tags=self._tags)
             fill_w = int(bar_w * min(w["pct"], 100) / 100)
             if fill_w:
-                c.create_rectangle(x, y - bar_h // 2, x + fill_w, y + bar_h // 2, fill=col, outline="")
+                c.create_rectangle(x, y - bar_h // 2, x + fill_w, y + bar_h // 2, fill=col, outline="", tags=self._tags)
             x += bar_w + self.px(6)
         x = self.text(c, x, y, f"{w['pct']:.0f}%", col, self.font(11, True), gap=6)
         return self.text(c, x, y, f"↺{fmt_reset(w['resets_at'])}", self.dim, self.font(9), gap=0)
@@ -600,7 +618,86 @@ class StatusBar:
             self.toggle_popup()
 
     def on_right(self, e):
+        self.hide_tooltip()
         self.menu.tk_popup(e.x_root, e.y_root)
+
+    # --- 호버 툴팁: 서비스 · 계정 · 폴더 · 창별 값과 리셋 · 모델별 · 플랜/조회 ---
+    def entry_at(self, x):
+        for x0, x1, e in self.entry_spans:
+            if x0 <= x <= x1:
+                return e
+        return None
+
+    def on_motion(self, ev):
+        e = self.entry_at(ev.x)
+        if e is not self.tooltip_entry:
+            self.hide_tooltip()
+            self.tooltip_entry = e
+            if e is not None:
+                self.tooltip_job = self.root.after(400, lambda: self.show_tooltip(e, ev.x_root))
+        elif self.tooltip and e is not None:
+            self.place_tooltip(ev.x_root)
+
+    def on_leave(self, ev=None):
+        self.hide_tooltip()
+        self.tooltip_entry = None
+
+    def tooltip_text(self, e):
+        p = get_provider(e["provider"])
+        d = self.data.get(entry_key(e)) or {}
+        lines = [f"{p.name} · {e['label']}", e["path"]]
+        u = d.get("usage")
+        if u:
+            for w in u["windows"]:
+                lines.append(f"{w['key']} {w['pct']:.0f}% · " + t("tt_reset", t=fmt_reset(w["resets_at"])))
+            for s_ in u.get("scoped") or []:
+                lines.append(f"{s_['model']} {s_['pct']:.0f}% " + t("tt_scoped"))
+        if d.get("error"):
+            lines.append(t("tt_error", err=tr_error(d["error"])))
+        elif self.official() and d.get("saved_at"):
+            age = int((datetime.now() - d["saved_at"]).total_seconds() // 60)
+            lines.append(t("tt_official_ago", m=age) if age >= 1 else t("tt_official"))
+        elif d.get("last_ok"):
+            try:
+                plan = p.info(e["path"]).get("plan") or "?"
+            except Exception:
+                plan = "?"
+            lines.append(t("tt_fetched", plan=plan, time=d["last_ok"].strftime("%H:%M:%S")))
+        elif not u:
+            lines.append(t("tt_loading"))
+        return "\n".join(lines)
+
+    def show_tooltip(self, e, x_root):
+        self.tooltip_job = None
+        if self.tooltip or self.tooltip_entry is not e:
+            return
+        tip = tk.Toplevel(self.root)
+        tip.overrideredirect(True)
+        tip.attributes("-topmost", True)
+        tip.configure(bg="#3a3a3a")
+        tk.Label(tip, text=self.tooltip_text(e), justify="left", bg="#202020", fg="#f0f0f0",
+                 font=("Segoe UI", 9), padx=10, pady=7).pack(padx=1, pady=1)
+        self.tooltip = tip
+        self.place_tooltip(x_root)
+
+    def place_tooltip(self, x_root):
+        if not self.tooltip:
+            return
+        self.tooltip.update_idletasks()
+        tw, th = self.tooltip.winfo_reqwidth(), self.tooltip.winfo_reqheight()
+        _, top, _, bottom = tb.win_rect(tb.taskbar())
+        sw = self.root.winfo_screenwidth()
+        x = max(0, min(int(x_root - tw / 2), sw - tw))
+        y = top - th - self.px(8) if top > 0 else bottom + self.px(6)
+        self.tooltip.geometry(f"+{x}+{y}")
+
+    def hide_tooltip(self):
+        if self.tooltip_job:
+            self.root.after_cancel(self.tooltip_job)
+            self.tooltip_job = None
+        if self.tooltip:
+            self.tooltip.destroy()
+            self.tooltip = None
 
     def check_alerts(self):
         for e in self.enabled_entries():
@@ -624,184 +721,327 @@ class StatusBar:
                 pass
         threading.Thread(target=lambda: tb.message_box(msg, APP_TITLE, 0x40 | 0x10000), daemon=True).start()
 
-    # --- 설정 창 ---
-    def open_settings(self, install_mode=False):
+    # ======================================================================
+    # 설정 창 — 상단 «미리보기» + 탭(항목 / 표시·스타일 / 데이터 / 시작·언어 / 정보)
+    # 어떤 컨트롤을 바꿔도 미리보기가 즉시 다시 그려지고, «저장» 은 적용만 하고 창은 남긴다.
+    # ======================================================================
+    PRESETS = (
+        ("default", {"display_mode": "all", "show_scoped": False, "style": {"label": False, "bars": "bars"}}),
+        ("minimal", {"display_mode": "all", "show_scoped": False, "style": {"label": False, "bars": "numbers"}}),
+        ("labels", {"display_mode": "all", "show_scoped": False, "style": {"label": True, "bars": "bars"}}),
+        ("full", {"display_mode": "all", "show_scoped": True, "style": {"label": False, "bars": "bars"}}),
+        ("slide", {"display_mode": "slide", "show_scoped": False, "style": {"label": True, "bars": "auto"}}),
+        ("pinned", {"display_mode": "fixed", "show_scoped": True, "style": {"label": False, "bars": "auto"}}),
+    )
+    SAMPLE = {   # 실제 값이 없을 때 미리보기에 쓰는 예시
+        "claude_code": {"windows": [{"key": "5h", "pct": 42.0}, {"key": "7d", "pct": 71.0}], "scoped": [{"model": "Fable", "pct": 56.0}]},
+        "codex": {"windows": [{"key": "5h", "pct": 18.0}, {"key": "7d", "pct": 33.0}], "scoped": []},
+    }
+
+    # --- 폼 ↔ 설정 ---
+    def form_settings(self):
+        """설정 창의 현재 컨트롤 값을 설정 dict 로."""
+        entries = []
+        for r in self.rows:
+            p = get_provider(r["provider"])
+            entries.append({"provider": r["provider"], "path": r["path"],
+                            "label": r["label"].get().strip() or p.label(r["path"]),
+                            "enabled": r["enabled"].get(),
+                            "windows": {"5h": r["w5h"].get(), "7d": r["w7d"].get()}})
+        try:
+            slide_sec = max(5, min(3600, int(self.v_slide_sec.get())))
+        except Exception:
+            slide_sec = 30
+        names = [t("lang_auto")] + [LANG_NAMES[c] for c in SUPPORTED]
+        language = self.lang_codes[names.index(self.v_lang.get())] if self.v_lang.get() in names else "auto"
+        fixed = next((k for k, n in self.fixed_choices() if n == self.v_fixed.get()), "")
+        return {
+            "entries": entries, "display_mode": self.v_mode.get(), "slide_sec": slide_sec, "fixed_entry": fixed,
+            "show_scoped": self.v_scoped.get(),
+            "style": {"label": self.v_label.get(), "bars": self.v_bars.get(), "label_color": self.v_label_color.get()},
+            "language": language, "data_source": self.v_ds.get(),
+            "official_hide_unsupported": self.v_hide.get(),
+            "seen_providers": [p.id for p in PROVIDERS],
+        }
+
+    def fixed_choices(self):
+        return [(entry_key(r), f"{get_provider(r['provider']).short} · {r['label'].get().strip() or get_provider(r['provider']).label(r['path'])}")
+                for r in self.rows]
+
+    def snapshot(self):
+        return json.dumps(self.form_settings(), sort_keys=True, ensure_ascii=False) + f"|auto={self.v_auto.get()}"
+
+    def is_dirty(self):
+        try:
+            return self.snapshot() != self._baseline
+        except Exception:
+            return False
+
+    def watch_var(self, var):
+        var.trace_add("write", lambda *a: self.preview_dirty())
+        return var
+
+    def preview_dirty(self):
+        if self.settings_win and not getattr(self, "_preview_job", None):
+            self._preview_job = self.root.after_idle(self.refresh_preview)
+
+    # --- 미리보기 ---
+    def preview_data(self, entries):
+        """실제 값이 있으면 실제, 없으면 예시값."""
+        out = {}
+        now = datetime.now()
+        for e in entries:
+            k = entry_key(e)
+            real = self.data.get(k) or {}
+            if real.get("usage"):
+                out[k] = {"usage": real["usage"], "error": None, "saved_at": None}
+                continue
+            sm = self.SAMPLE.get(e["provider"]) or self.SAMPLE["codex"]
+            wins = [{"key": w["key"], "pct": w["pct"], "resets_at": now.replace(microsecond=0)} for w in sm["windows"]]
+            out[k] = {"usage": {"windows": wins, "scoped": list(sm["scoped"]), "fetched_at": now}, "error": None, "saved_at": None}
+        return out
+
+    def render_preview(self, canvas, settings, height, mode=None, entries=None):
+        """폼 설정으로 캔버스에 바를 그린다 (다크 팔레트 고정). 필요한 폭을 돌려준다."""
+        ents = entries if entries is not None else [e for e in settings["entries"] if e["enabled"]]
+        saved = (self.fg, self.dim, self.track, self.line, self.bg, self.mode)
+        self.bg, self.fg, self.dim, self.track, self.line = (32, 32, 32), "#f0f0f0", "#a0a0a0", "#404040", "#505050"
+        self._ov = {"settings": settings, "entries": ents, "data": self.preview_data(ents)}
+        try:
+            vis = self.visible_entries()
+            if mode is None:
+                mode = self.tiers(settings)[0]
+            need = self.draw(canvas, mode, height, entries=vis)
+        finally:
+            self._ov = None
+            self.fg, self.dim, self.track, self.line, self.bg, self.mode = saved
+        return need
+
+    def refresh_preview(self):
+        self._preview_job = None
+        if not self.settings_win:
+            return
+        try:
+            S = self.form_settings()
+        except Exception:
+            return
+        c = self.preview_canvas
+        h = self.h
+        # 지금 빈 공간에서 실제로 잡힐 단계
+        gap_w = (self.gaps[0][1] - self.gaps[0][0]) if self.gaps else 0
+        tier, need = None, 0
+        for m in self.tiers(S):
+            need = self.render_preview(c, S, h, mode=m)
+            if gap_w and need <= gap_w:
+                tier = m
+                break
+        if tier is None:                       # 못 잰 상태거나 아무것도 안 맞으면 가장 큰 단계로 보여준다
+            tier = self.tiers(S)[0]
+            need = self.render_preview(c, S, h, mode=tier)
+        c.configure(width=min(max(need + self.px(8), self.px(120)), self.px(700)))
+        if gap_w:
+            self.preview_hint.configure(text=t("preview_hint", n=gap_w, tier=t(f"tier_{tier}")))
+        else:
+            self.preview_hint.configure(text=t("preview_hint_nogap"))
+        self.highlight_presets(S)
+
+    # --- 프리셋 ---
+    def preset_matches(self, S, values):
+        if S["display_mode"] != values["display_mode"] or S["show_scoped"] != values["show_scoped"]:
+            return False
+        return all(S["style"][k] == v for k, v in values["style"].items())
+
+    def apply_preset(self, values):
+        self.v_mode.set(values["display_mode"])
+        self.v_scoped.set(values["show_scoped"])
+        self.v_label.set(values["style"]["label"])
+        self.v_bars.set(values["style"]["bars"])
+        self.preview_dirty()
+
+    def highlight_presets(self, S):
+        for key, values, frame in self.preset_cards:
+            on = self.preset_matches(S, values)
+            frame.configure(highlightbackground="#3b82f6" if on else "#d0d0d0", highlightthickness=2 if on else 1)
+
+    def draw_preset_card(self, canvas, values):
+        """카드 안 미리보기: 예시 항목 2개(Claude·Codex)를 그 프리셋으로."""
+        S = json.loads(json.dumps(DEFAULT_SETTINGS))
+        S.update({k: v for k, v in values.items() if k != "style"})
+        S["style"].update(values["style"])
+        sample = [{"provider": "claude_code", "path": "sample-claude", "label": "work", "enabled": True, "windows": {}},
+                  {"provider": "codex", "path": "sample-codex", "label": "home", "enabled": True, "windows": {}}]
+        S["entries"] = sample
+        S["fixed_entry"] = entry_key(sample[0])
+        h = int(canvas["height"])
+        self.render_preview(canvas, S, h, entries=sample)
+
+    # --- 창 ---
+    def section(self, parent, key, row, hint=None):
+        """굵은 제목 + 얇은 구분선 (+ 회색 설명 한 줄)."""
+        ttk.Label(parent, text=t(key), font=("Segoe UI", 10, "bold")).grid(row=row, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Separator(parent, orient="horizontal").grid(row=row + 1, column=0, columnspan=4, sticky="ew", pady=(2, 3))
+        if hint:
+            ttk.Label(parent, text=t(hint), foreground="#808080", font=("Segoe UI", 8), wraplength=self.px(690), justify="left").grid(
+                row=row + 2, column=0, columnspan=4, sticky="w", pady=(0, 6))
+            return row + 3
+        return row + 2
+
+    def open_settings(self, install_mode=False, tab=0):
         if self.settings_win:
             self.settings_win.lift()
             self.settings_win.focus_force()
             return
         w = tk.Toplevel(self.root)
         self.settings_win = w
+        self.install_mode = install_mode
+        self.fixed_combo = None                       # 탭이 만들어지기 전에는 없다 (이전 창의 것을 만지지 않게)
         w.title(f"{APP_TITLE} {t('win_setup') if install_mode else t('win_settings')}")
-        w.resizable(False, True)
+        w.resizable(False, False)
         w.attributes("-topmost", True)
+        w.configure(bg="#f3f3f3")
         try:
             w.iconbitmap(ICON_PATH)
         except Exception:
             pass
-        # 화면이 낮아도 잘리지 않게: 캔버스 안에 프레임을 넣고 세로 스크롤
-        outer = tk.Canvas(w, highlightthickness=0, bd=0)
-        vsb = ttk.Scrollbar(w, orient="vertical", command=outer.yview)
-        outer.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
-        outer.pack(side="left", fill="both", expand=True)
-        f = ttk.Frame(outer, padding=18)
-        fid = outer.create_window((0, 0), window=f, anchor="nw")
-        f.bind("<Configure>", lambda e: outer.configure(scrollregion=outer.bbox("all"), width=f.winfo_reqwidth()))
-        outer.bind_all("<MouseWheel>", lambda e: outer.yview_scroll(-1 * (e.delta // 120), "units"))
+        style = ttk.Style(w)
+        for theme in ("vista", "clam"):
+            if theme in style.theme_names():
+                style.theme_use(theme)
+                break
+        style.configure("Card.TFrame", background="#ffffff")
+        style.configure("TNotebook", padding=(4, 4))
+        style.configure("TNotebook.Tab", padding=(12, 4), font=("Segoe UI", 9))
 
-        ttk.Label(f, text=APP_TITLE, font=("Segoe UI", 13, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Label(f, text=f"v{__version__}", foreground="#808080").grid(row=0, column=1, sticky="e")
-        ttk.Label(f, text=t("app_desc"), foreground="#606060").grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 12))
+        # 상단: 제목 줄 + 미리보기
+        top = ttk.Frame(w, padding=(18, 10, 18, 4))
+        top.pack(fill="x")
+        ttk.Label(top, text=APP_TITLE, font=("Segoe UI", 13, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(top, text=f"v{__version__}  ·  " + t("preview_title"), foreground="#808080").grid(row=0, column=1, sticky="e")
+        top.columnconfigure(0, weight=1)
+        pv = tk.Frame(top, bg="#202020", bd=0, highlightthickness=1, highlightbackground="#c8c8c8")
+        pv.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.preview_canvas = tk.Canvas(pv, width=self.px(400), height=self.h, bg="#202020", highlightthickness=0, bd=0)
+        self.preview_canvas.bind("<Motion>", lambda ev: None)
+        self.preview_canvas.pack(padx=self.px(6), pady=self.px(2))
+        self.preview_hint = ttk.Label(top, text="", foreground="#404040", font=("Segoe UI", 9))
+        self.preview_hint.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        ttk.Label(top, text=t("preview_note"), foreground="#808080", font=("Segoe UI", 8), wraplength=self.px(700), justify="left").grid(
+            row=4, column=0, columnspan=2, sticky="w")
 
-        # 항목(제공자 × 계정)
-        acc = ttk.LabelFrame(f, text=t("sec_entries"), padding=10)
-        acc.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-        self.rows_frame = ttk.Frame(acc)
-        self.rows_frame.grid(row=0, column=0, columnspan=3, sticky="ew")
+        nb = ttk.Notebook(w)
+        nb.pack(fill="both", expand=True, padx=14, pady=(6, 0))
+        self.nb = nb
+        tabs = [ttk.Frame(nb, padding=(14, 8, 14, 12)) for _ in range(5)]
+        for fr, key in zip(tabs, ("tab_entries", "tab_display", "tab_data", "tab_startup", "tab_about")):
+            nb.add(fr, text=t(key))
+        self.build_tab_entries(tabs[0])
+        self.build_tab_display(tabs[1])
+        self.build_tab_data(tabs[2])
+        self.build_tab_startup(tabs[3], install_mode)
+        self.build_tab_about(tabs[4])
+
+        # 하단 버튼
+        bt = ttk.Frame(w, padding=(18, 8, 18, 12))
+        bt.pack(fill="x")
+        self.saved_label = ttk.Label(bt, text="", foreground="#1a7f37", font=("Segoe UI", 9, "bold"))
+        self.saved_label.pack(side="left")
+        if install_mode:
+            ttk.Button(bt, text=t("btn_start"), command=lambda: self.apply_settings(close=True)).pack(side="right")
+        else:
+            ttk.Button(bt, text=t("btn_close"), command=self.close_settings).pack(side="right")
+            ttk.Button(bt, text=t("btn_save"), command=self.apply_settings).pack(side="right", padx=(0, 6))
+        w.protocol("WM_DELETE_WINDOW", (lambda: self.apply_settings(close=True)) if install_mode else self.close_settings)
+
+        self._baseline = self.snapshot()
+        self._preview_job = None
+        self.refresh_preview()
+        try:
+            nb.select(tab)
+        except Exception:
+            pass
+        w.update_idletasks()
+        sw_, sh_ = w.winfo_screenwidth(), w.winfo_screenheight()
+        width, height = min(w.winfo_reqwidth(), self.px(800)), min(w.winfo_reqheight(), sh_ - 80)
+        w.geometry(f"{width}x{height}+{(sw_ - width) // 2}+{max(0, (sh_ - height) // 2 - 30)}")
+        w.focus_force()
+
+    # --- 탭 1: 항목 ---
+    def build_tab_entries(self, f):
+        row = self.section(f, "sec_entries", 0, hint="hint_autodiscover")
+        self.rows_frame = ttk.Frame(f)
+        self.rows_frame.grid(row=row, column=0, columnspan=4, sticky="ew")
         self.rows = []
         for e in self.settings["entries"]:
             self.rows.append(self.make_row(e["provider"], e["path"], e["label"], e["enabled"], e["windows"]))
         self.rebuild_rows()
-        btns = ttk.Frame(acc)
-        btns.grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        btns = ttk.Frame(f)
+        btns.grid(row=row + 1, column=0, columnspan=4, sticky="w", pady=(10, 0))
         ttk.Button(btns, text=t("btn_add_folder"), command=self.add_folder_dialog).pack(side="left")
         ttk.Button(btns, text=t("btn_rescan"), command=self.rescan).pack(side="left", padx=(6, 0))
         ttk.Button(btns, text=t("btn_why_missing"), command=self.open_help).pack(side="left", padx=(6, 0))
-        ttk.Label(acc, text=t("hint_autodiscover"), foreground="#808080", justify="left").grid(row=2, column=0, columnspan=3, sticky="w", pady=(4, 0))
-        self.status_label = ttk.Label(acc, text="", justify="left", foreground="#404040")
-        self.status_label.grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
-        ttk.Button(acc, text=t("btn_recheck"), command=self.refresh_async).grid(row=4, column=0, sticky="w", pady=(6, 0))
-        self.fill_status()
-
-        # 데이터 원본
-        ds = ttk.LabelFrame(f, text=t("sec_data_source"), padding=10)
-        ds.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-        self.v_ds = tk.StringVar(value=self.settings["data_source"])
-        for i, (val, key) in enumerate((("api", "ds_api"), ("official", "ds_official"))):
-            tk.Radiobutton(ds, text=t(key), variable=self.v_ds, value=val, anchor="w", justify="left",
-                           wraplength=self.px(640)).grid(row=i, column=0, sticky="w")
-        self.v_hide = tk.BooleanVar(value=self.settings["official_hide_unsupported"])
-        ttk.Checkbutton(ds, text=t("ds_hide_unsupported"), variable=self.v_hide).grid(row=2, column=0, sticky="w", pady=(4, 0))
-
-        # 표시 방식
-        disp = ttk.LabelFrame(f, text=t("sec_display"), padding=10)
-        disp.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-        self.v_mode = tk.StringVar(value=self.settings["display_mode"])
-        for i, mode in enumerate(MODES):
-            ttk.Radiobutton(disp, text=t(f"mode_{mode}"), variable=self.v_mode, value=mode).grid(row=i // 2, column=i % 2, sticky="w", padx=(0, 16), pady=1)
-        row = ttk.Frame(disp)
-        row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
-        self.v_slide_sec = tk.IntVar(value=self.settings["slide_sec"])
-        ttk.Label(row, text=t("slide_hint_pre")).pack(side="left")
-        ttk.Spinbox(row, from_=5, to=3600, increment=5, width=6, textvariable=self.v_slide_sec).pack(side="left", padx=(6, 4))
-        ttk.Label(row, text=t("slide_hint"), foreground="#808080").pack(side="left")
-        row2 = ttk.Frame(disp)
-        row2.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
-        ttk.Label(row2, text=t("fixed_hint")).pack(side="left")
-        self.fixed_choices = [(entry_key(e), f"{get_provider(e['provider']).short} · {e['label']}") for e in self.settings["entries"]]
-        names = [n for _, n in self.fixed_choices]
-        cur = next((n for k, n in self.fixed_choices if k == self.settings["fixed_entry"]), names[0] if names else "")
-        self.v_fixed = tk.StringVar(value=cur)
-        ttk.Combobox(row2, textvariable=self.v_fixed, values=names, state="readonly", width=28).pack(side="left", padx=(6, 0))
-
-        # 스타일
-        sty = ttk.LabelFrame(f, text=t("sec_style"), padding=10)
-        sty.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-        st = self.settings["style"]
-        self.v_badge = tk.BooleanVar(value=st["badge"])
-        self.v_label = tk.BooleanVar(value=st["label"])
-        self.v_scoped = tk.BooleanVar(value=self.settings["show_scoped"])
-        ttk.Checkbutton(sty, text=t("style_badge"), variable=self.v_badge).grid(row=0, column=0, sticky="w")
-        ttk.Checkbutton(sty, text=t("style_label"), variable=self.v_label).grid(row=0, column=1, sticky="w", padx=(16, 0))
-        ttk.Checkbutton(sty, text=t("item_scoped"), variable=self.v_scoped).grid(row=0, column=2, sticky="w", padx=(16, 0))
-        brow = ttk.Frame(sty)
-        brow.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        ttk.Label(brow, text=t("style_bars")).pack(side="left")
-        self.v_bars = tk.StringVar(value=st["bars"])
-        for val in BAR_STYLES:
-            ttk.Radiobutton(brow, text=t(f"style_bars_{val}"), variable=self.v_bars, value=val).pack(side="left", padx=(10, 0))
-        crow = ttk.Frame(sty)
-        crow.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        self.v_badge_color = tk.StringVar(value=st["badge_color"])
-        self.v_label_color = tk.StringVar(value=st["label_color"])
-        for i, (key, var) in enumerate((("style_badge_color", self.v_badge_color), ("style_label_color", self.v_label_color))):
-            ttk.Label(crow, text=t(key)).pack(side="left", padx=((0 if i == 0 else 18), 4))
-            sw = tk.Label(crow, textvariable=var, width=8, relief="groove", bg=var.get() or "#e0e0e0")
-            sw.pack(side="left")
-            ttk.Button(crow, text=t("style_pick"), command=lambda v=var, s=sw: self.pick_color(v, s)).pack(side="left", padx=(4, 0))
-            ttk.Button(crow, text=t("style_reset"), command=lambda v=var, s=sw: (v.set(""), s.configure(bg="#e0e0e0"))).pack(side="left", padx=(2, 0))
-
-        # 시작
-        stf = ttk.LabelFrame(f, text=t("sec_startup"), padding=10)
-        stf.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-        self.v_auto = tk.BooleanVar(value=True if install_mode else os.path.exists(STARTUP_LNK))
-        ttk.Checkbutton(stf, text=t("autostart"), variable=self.v_auto).grid(row=0, column=0, sticky="w")
-        ttk.Label(stf, text=t("run_location", dir=APP_DIR), foreground="#808080", justify="left").grid(row=1, column=0, sticky="w", pady=(4, 0))
-
-        # 언어
-        lang = ttk.LabelFrame(f, text=t("sec_language"), padding=10)
-        lang.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-        self.lang_codes = ["auto"] + list(SUPPORTED)
-        names = [t("lang_auto")] + [LANG_NAMES[c] for c in SUPPORTED]
-        self.v_lang = tk.StringVar(value=names[self.lang_codes.index(self.settings["language"])])
-        ttk.Combobox(lang, textvariable=self.v_lang, values=names, state="readonly", width=18).grid(row=0, column=0, sticky="w")
-
-        link = ttk.Label(f, text=t("link_readme"), foreground="#0a66c2", cursor="hand2")
-        link.grid(row=8, column=0, columnspan=2, sticky="w")
-        link.bind("<Button-1>", lambda e: webbrowser.open(README_URL))
-        ttk.Label(f, text=t("unofficial_note"), foreground="#808080", justify="left").grid(row=9, column=0, columnspan=2, sticky="w", pady=(4, 12))
-
-        bt = ttk.Frame(f)
-        bt.grid(row=10, column=0, columnspan=2, sticky="e")
-        if install_mode:
-            ttk.Button(bt, text=t("btn_start"), command=self.apply_settings).pack(side="left")
-        else:
-            ttk.Button(bt, text=t("btn_save"), command=self.apply_settings).pack(side="left", padx=(0, 6))
-            ttk.Button(bt, text=t("btn_close"), command=self.close_settings).pack(side="left")
-        w.protocol("WM_DELETE_WINDOW", self.apply_settings if install_mode else self.close_settings)
-        w.update_idletasks()
-        sw_, sh_ = w.winfo_screenwidth(), w.winfo_screenheight()
-        width = f.winfo_reqwidth() + vsb.winfo_reqwidth() + 4
-        height = min(f.winfo_reqheight() + 4, sh_ - 120)
-        w.geometry(f"{width}x{height}+{(sw_ - width) // 2}+{max(0, (sh_ - height) // 2 - 30)}")
-        w.focus_force()
+        self.rescan_label = ttk.Label(f, text="", foreground="#404040", font=("Segoe UI", 9))
+        self.rescan_label.grid(row=row + 2, column=0, columnspan=4, sticky="w", pady=(6, 0))
 
     def make_row(self, provider, path, label, enabled, windows):
-        return {"provider": provider, "path": path, "enabled": tk.BooleanVar(value=enabled),
-                "label": tk.StringVar(value=label),
-                "w5h": tk.BooleanVar(value=windows.get("5h", True)), "w7d": tk.BooleanVar(value=windows.get("7d", True))}
+        r = {"provider": provider, "path": path,
+             "enabled": self.watch_var(tk.BooleanVar(value=enabled)),
+             "label": self.watch_var(tk.StringVar(value=label)),
+             "w5h": self.watch_var(tk.BooleanVar(value=windows.get("5h", True))),
+             "w7d": self.watch_var(tk.BooleanVar(value=windows.get("7d", True)))}
+        return r
+
+    def row_status(self, r):
+        """(색, 짧은 글)  — 연결됨 / 오류 / 미확인"""
+        p = get_provider(r["provider"])
+        d = self.data.get(f"{r['provider']}|{r['path']}") or {}
+        try:
+            info = p.info(r["path"])
+        except Exception:
+            info = {"connected": False}
+        if d.get("error") or not info.get("connected"):
+            return "#d23f31", t("st_err")
+        if d.get("usage") or info.get("connected"):
+            return "#1a7f37", t("st_ok")
+        return "#9a9a9a", t("st_unknown")
 
     def rebuild_rows(self):
         for child in self.rows_frame.winfo_children():
             child.destroy()
         if not self.rows:
-            ttk.Label(self.rows_frame, text=t("no_entries_row"), foreground="#a05020").grid(row=0, column=0, sticky="w")
+            ttk.Label(self.rows_frame, text=t("no_entries_row"), foreground="#a05020", wraplength=self.px(680), justify="left").grid(row=0, column=0, sticky="w")
+            self.preview_dirty()
             return
-        heads = ("col_show", "col_provider", "col_label", "col_folder", "col_windows", "col_statusline", "col_order")
-        for c, key in enumerate(heads):
-            ttk.Label(self.rows_frame, text=t(key), foreground="#808080").grid(row=0, column=c, sticky="w", padx=(0, 8))
-        for i, r in enumerate(self.rows, start=1):
+        for i, r in enumerate(self.rows):
             p = get_provider(r["provider"])
-            ttk.Checkbutton(self.rows_frame, variable=r["enabled"]).grid(row=i, column=0)
-            ttk.Label(self.rows_frame, text=p.short, font=("Segoe UI", 9, "bold")).grid(row=i, column=1, sticky="w", padx=(0, 8))
-            ttk.Entry(self.rows_frame, textvariable=r["label"], width=13).grid(row=i, column=2, sticky="w", padx=(0, 8))
-            ttk.Label(self.rows_frame, text=r["path"], foreground="#404040").grid(row=i, column=3, sticky="w", padx=(0, 8))
-            wf = ttk.Frame(self.rows_frame)
-            wf.grid(row=i, column=4, sticky="w", padx=(0, 8))
+            card = tk.Frame(self.rows_frame, bg="#ffffff", highlightthickness=1, highlightbackground="#dcdcdc", padx=10, pady=6)
+            card.grid(row=i, column=0, sticky="ew", pady=(0, 6))
+            self.rows_frame.columnconfigure(0, weight=1)
+            ttk.Checkbutton(card, variable=r["enabled"]).grid(row=0, column=0, rowspan=2, padx=(0, 6))
+            tk.Label(card, text=p.name, bg="#ffffff", fg="#808080", font=("Segoe UI", 8), anchor="w", width=16).grid(row=0, column=2, sticky="w")
+            tk.Label(card, text=r["path"], bg="#ffffff", fg="#707070", font=("Segoe UI", 8), anchor="w").grid(row=1, column=2, columnspan=4, sticky="w")
+            ttk.Entry(card, textvariable=r["label"], width=13).grid(row=0, column=3, sticky="w", padx=(6, 10))
+            wf = tk.Frame(card, bg="#ffffff")
+            wf.grid(row=0, column=4, sticky="w")
             ttk.Checkbutton(wf, text="5h", variable=r["w5h"]).pack(side="left")
-            ttk.Checkbutton(wf, text="7d", variable=r["w7d"]).pack(side="left")
+            ttk.Checkbutton(wf, text="7d", variable=r["w7d"]).pack(side="left", padx=(4, 0))
+            col, txt = self.row_status(r)
+            sf = tk.Frame(card, bg="#ffffff")
+            sf.grid(row=0, column=5, sticky="w", padx=(12, 0))
+            tk.Canvas(sf, width=10, height=10, bg="#ffffff", highlightthickness=0).pack(side="left")
+            sf.winfo_children()[0].create_oval(1, 1, 9, 9, fill=col, outline=col)
+            tk.Label(sf, text=txt, bg="#ffffff", fg=col, font=("Segoe UI", 8)).pack(side="left", padx=(4, 0))
+            right = tk.Frame(card, bg="#ffffff")
+            right.grid(row=0, column=6, rowspan=2, sticky="e", padx=(12, 0))
+            card.columnconfigure(6, weight=1)
             if p.supports_official:
                 linked = cc.statusline_installed(r["path"])
-                ttk.Button(self.rows_frame, text=t("btn_statusline_uninstall" if linked else "btn_statusline_install"),
-                           command=lambda r=r: self.toggle_statusline(r)).grid(row=i, column=5, sticky="w", padx=(0, 8))
-            else:
-                ttk.Label(self.rows_frame, text="—", foreground="#a0a0a0").grid(row=i, column=5, sticky="w", padx=(0, 8))
-            of = ttk.Frame(self.rows_frame)
-            of.grid(row=i, column=6, sticky="w")
-            ttk.Button(of, text="▲", width=2, command=lambda r=r: self.move_row(r, -1)).pack(side="left")
-            ttk.Button(of, text="▼", width=2, command=lambda r=r: self.move_row(r, 1)).pack(side="left")
-            ttk.Button(of, text="✕", width=2, command=lambda r=r: (self.rows.remove(r), self.rebuild_rows())).pack(side="left", padx=(4, 0))
+                ttk.Button(right, text=t("btn_statusline_uninstall" if linked else "btn_statusline_install"), width=14,
+                           command=lambda r=r: self.toggle_statusline(r)).pack(side="left", padx=(0, 8))
+            ttk.Button(right, text="▲", width=2, command=lambda r=r: self.move_row(r, -1)).pack(side="left")
+            ttk.Button(right, text="▼", width=2, command=lambda r=r: self.move_row(r, 1)).pack(side="left")
+            ttk.Button(right, text="✕", width=2, command=lambda r=r: (self.rows.remove(r), self.rebuild_rows())).pack(side="left", padx=(4, 0))
+        self.refresh_fixed_combo()
+        self.preview_dirty()
 
     def move_row(self, r, delta):
         i = self.rows.index(r)
@@ -810,12 +1050,141 @@ class StatusBar:
             self.rows[i], self.rows[j] = self.rows[j], self.rows[i]
             self.rebuild_rows()
 
-    def pick_color(self, var, swatch):
+    def refresh_fixed_combo(self):
+        if not getattr(self, "fixed_combo", None) or not self.fixed_combo.winfo_exists():
+            return
+        names = [n for _, n in self.fixed_choices()]
+        self.fixed_combo.configure(values=names)
+        if self.v_fixed.get() not in names:
+            self.v_fixed.set(names[0] if names else "")
+
+    # --- 탭 2: 표시 · 스타일 ---
+    def build_tab_display(self, f):
+        st = self.settings["style"]
+        self.v_mode = self.watch_var(tk.StringVar(value=self.settings["display_mode"]))
+        self.v_slide_sec = self.watch_var(tk.IntVar(value=self.settings["slide_sec"]))
+        self.v_label = self.watch_var(tk.BooleanVar(value=st["label"]))
+        self.v_scoped = self.watch_var(tk.BooleanVar(value=self.settings["show_scoped"]))
+        self.v_bars = self.watch_var(tk.StringVar(value=st["bars"]))
+        self.v_label_color = self.watch_var(tk.StringVar(value=st["label_color"]))
+        names = [n for _, n in self.fixed_choices()]
+        cur = next((n for k, n in self.fixed_choices() if k == self.settings["fixed_entry"]), names[0] if names else "")
+        self.v_fixed = self.watch_var(tk.StringVar(value=cur))
+
+        # 프리셋 카드
+        row = self.section(f, "presets_title", 0, hint="presets_hint")
+        grid = ttk.Frame(f)
+        grid.grid(row=row, column=0, columnspan=4, sticky="ew")
+        self.preset_cards = []
+        for i, (key, values) in enumerate(self.PRESETS):
+            card = tk.Frame(grid, bg="#ffffff", highlightthickness=1, highlightbackground="#d0d0d0", cursor="hand2", padx=8, pady=6)
+            card.grid(row=i // 3, column=i % 3, padx=(0, 8) if i % 3 < 2 else 0, pady=(0, 8), sticky="nsew")
+            grid.columnconfigure(i % 3, weight=1)
+            cv = tk.Canvas(card, width=self.px(214), height=self.px(28), bg="#202020", highlightthickness=0, bd=0)
+            cv.pack(anchor="w")
+            self.draw_preset_card(cv, values)
+            row_ = tk.Frame(card, bg="#ffffff")
+            row_.pack(anchor="w", fill="x", pady=(3, 0))
+            tk.Label(row_, text=t(f"preset_{key}"), bg="#ffffff", font=("Segoe UI", 9, "bold"), anchor="w").pack(side="left")
+            tk.Label(row_, text="  " + t(f"preset_{key}_desc"), bg="#ffffff", fg="#707070", font=("Segoe UI", 8), anchor="w").pack(side="left")
+            for wdg in (card, cv, row_, *row_.winfo_children()):
+                wdg.bind("<Button-1>", lambda e, v=values: self.apply_preset(v))
+            self.preset_cards.append((key, values, card))
+
+        # 표시 방식
+        row = self.section(f, "sec_mode", row + 1)
+        mf = ttk.Frame(f)
+        mf.grid(row=row, column=0, columnspan=4, sticky="ew")
+        for i, mode in enumerate(MODES):
+            tk.Radiobutton(mf, text=t(f"mode_{mode}"), variable=self.v_mode, value=mode, anchor="w", justify="left",
+                           wraplength=self.px(320)).grid(row=i // 2, column=i % 2, sticky="w", padx=(0, 14))
+        sub = ttk.Frame(f)
+        sub.grid(row=row + 1, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Label(sub, text=t("slide_hint_pre")).pack(side="left")
+        ttk.Spinbox(sub, from_=5, to=3600, increment=5, width=6, textvariable=self.v_slide_sec).pack(side="left", padx=(6, 4))
+        ttk.Label(sub, text=t("slide_hint"), foreground="#808080", font=("Segoe UI", 8)).pack(side="left", padx=(0, 18))
+        ttk.Label(sub, text=t("fixed_hint")).pack(side="left")
+        self.fixed_combo = ttk.Combobox(sub, textvariable=self.v_fixed, values=names, state="readonly", width=24)
+        self.fixed_combo.pack(side="left", padx=(6, 0))
+
+        # 모양
+        row = self.section(f, "sec_look", row + 2)
+        lf = ttk.Frame(f)
+        lf.grid(row=row, column=0, columnspan=4, sticky="ew")
+        ttk.Checkbutton(lf, text=t("style_label"), variable=self.v_label).grid(row=0, column=0, sticky="w")
+        ttk.Checkbutton(lf, text=t("item_scoped"), variable=self.v_scoped).grid(row=1, column=0, sticky="w", pady=(2, 0))
+        brow = ttk.Frame(f)
+        brow.grid(row=row + 1, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Label(brow, text=t("style_bars")).pack(side="left")
+        for val in BAR_STYLES:
+            ttk.Radiobutton(brow, text=t(f"style_bars_{val}"), variable=self.v_bars, value=val).pack(side="left", padx=(10, 0))
+        crow = ttk.Frame(f)
+        crow.grid(row=row + 2, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Label(crow, text=t("style_colors")).pack(side="left")
+        for key, var in (("style_label_color", self.v_label_color),):
+            ttk.Label(crow, text=t(key)).pack(side="left", padx=(10, 4))
+            chip = tk.Label(crow, width=3, relief="solid", bd=1, bg=var.get() or "#e0e0e0")
+            chip.pack(side="left")
+            var.trace_add("write", lambda *a, v=var, c=chip: c.configure(bg=v.get() or "#e0e0e0"))
+            ttk.Button(crow, text=t("style_pick"), width=7, command=lambda v=var: self.pick_color(v)).pack(side="left", padx=(4, 0))
+            ttk.Button(crow, text=t("style_reset"), width=5, command=lambda v=var: v.set("")).pack(side="left", padx=(2, 0))
+
+    def pick_color(self, var):
         rgb, hexv = colorchooser.askcolor(color=var.get() or None, parent=self.settings_win)
         if hexv:
             var.set(hexv)
-            swatch.configure(bg=hexv)
 
+    # --- 탭 3: 데이터 ---
+    def build_tab_data(self, f):
+        row = self.section(f, "sec_data_source", 0)
+        self.v_ds = self.watch_var(tk.StringVar(value=self.settings["data_source"]))
+        self.v_hide = self.watch_var(tk.BooleanVar(value=self.settings["official_hide_unsupported"]))
+        for i, (val, key) in enumerate((("api", "ds_api"), ("official", "ds_official"))):
+            tk.Radiobutton(f, text=t(key), variable=self.v_ds, value=val, anchor="w", justify="left",
+                           wraplength=self.px(660)).grid(row=row + i, column=0, columnspan=4, sticky="w", pady=1)
+        ttk.Checkbutton(f, text=t("ds_hide_unsupported"), variable=self.v_hide).grid(row=row + 2, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        row = self.section(f, "sec_status", row + 3)
+        self.status_label = ttk.Label(f, text="", justify="left", foreground="#404040", font=("Segoe UI", 9), wraplength=self.px(680))
+        self.status_label.grid(row=row, column=0, columnspan=4, sticky="w")
+        ttk.Button(f, text=t("btn_recheck"), command=self.refresh_async).grid(row=row + 1, column=0, sticky="w", pady=(8, 0))
+        self.fill_status()
+        ttk.Label(f, text=t("unofficial_note"), foreground="#808080", font=("Segoe UI", 8), justify="left", wraplength=self.px(690)).grid(
+            row=row + 2, column=0, columnspan=4, sticky="w", pady=(14, 0))
+
+    # --- 탭 4: 시작 · 언어 ---
+    def build_tab_startup(self, f, install_mode):
+        row = self.section(f, "sec_startup", 0)
+        self.v_auto = tk.BooleanVar(value=True if install_mode else os.path.exists(STARTUP_LNK))
+        ttk.Checkbutton(f, text=t("autostart"), variable=self.v_auto).grid(row=row, column=0, columnspan=4, sticky="w")
+        ttk.Label(f, text=t("run_location", dir=APP_DIR), foreground="#808080", font=("Segoe UI", 8), justify="left", wraplength=self.px(690)).grid(
+            row=row + 1, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        row = self.section(f, "sec_language", row + 2)
+        self.lang_codes = ["auto"] + list(SUPPORTED)
+        names = [t("lang_auto")] + [LANG_NAMES[c] for c in SUPPORTED]
+        self.v_lang = self.watch_var(tk.StringVar(value=names[self.lang_codes.index(self.settings["language"])]))
+        ttk.Combobox(f, textvariable=self.v_lang, values=names, state="readonly", width=20).grid(row=row, column=0, sticky="w")
+
+    # --- 탭 5: 정보 ---
+    def build_tab_about(self, f):
+        ttk.Label(f, text=f"{APP_TITLE}  v{__version__}", font=("Segoe UI", 12, "bold")).grid(row=0, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Label(f, text=t("app_desc"), foreground="#606060", wraplength=self.px(690), justify="left").grid(row=1, column=0, columnspan=4, sticky="w", pady=(2, 0))
+        ttk.Label(f, text=" · ".join(p.name for p in PROVIDERS), foreground="#808080", font=("Segoe UI", 9)).grid(row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        row = self.section(f, "about_transparency", 3)
+        for i, key in enumerate(("about_reads", "about_sends", "about_stores")):
+            ttk.Label(f, text="•  " + t(key), wraplength=self.px(690), justify="left").grid(row=row + i, column=0, columnspan=4, sticky="w", pady=(0, 3))
+        links = ttk.Frame(f)
+        links.grid(row=row + 3, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        for key, url in (("link_readme", README_URL), ("menu_support", SUPPORT_URL)):
+            lk = ttk.Label(links, text=t(key), foreground="#0a66c2", cursor="hand2")
+            lk.pack(anchor="w", pady=(0, 3))
+            lk.bind("<Button-1>", lambda e, u=url: webbrowser.open(u))
+        ttk.Button(f, text=t("btn_why_missing"), command=self.open_help).grid(row=row + 4, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(f, text=t("unofficial_note"), foreground="#808080", font=("Segoe UI", 8), justify="left", wraplength=self.px(690)).grid(
+            row=row + 5, column=0, columnspan=4, sticky="w", pady=(14, 0))
+        ttk.Label(f, text=t("trademark_note"), foreground="#808080", font=("Segoe UI", 8), justify="left", wraplength=self.px(690)).grid(
+            row=row + 6, column=0, columnspan=4, sticky="w", pady=(4, 0))
+
+    # --- 항목 조작 ---
     def toggle_statusline(self, r):
         """그 계정 폴더의 settings.json 에 statusLine 내보내기를 설치/해제한다 — 반드시 확인 대화상자 뒤에."""
         path = r["path"]
@@ -873,9 +1242,7 @@ class StatusBar:
         ttk.Button(bt, text=t("btn_ok"), command=lambda: (result.update(ok=True), dlg.destroy())).pack(side="left", padx=(0, 6))
         ttk.Button(bt, text=t("btn_cancel"), command=dlg.destroy).pack(side="left")
         dlg.update_idletasks()
-        x = self.settings_win.winfo_rootx() + 60
-        y = self.settings_win.winfo_rooty() + 80
-        dlg.geometry(f"+{x}+{y}")
+        dlg.geometry(f"+{self.settings_win.winfo_rootx() + 60}+{self.settings_win.winfo_rooty() + 80}")
         dlg.grab_set()
         self.settings_win.wait_window(dlg)
         return get_provider(v.get()) if result["ok"] else None
@@ -889,10 +1256,10 @@ class StatusBar:
                     self.rows.append(self.make_row(p.id, d, p.label(d), True, {}))
                     added += 1
         self.rebuild_rows()
-        self.status_label.configure(text=t("rescan_found", n=added) if added else t("rescan_none"))
+        self.rescan_label.configure(text=t("rescan_found", n=added) if added else t("rescan_none"))
 
     def fill_status(self):
-        if not self.settings_win:
+        if not self.settings_win or not hasattr(self, "status_label"):
             return
         lines = []
         for e in self.settings["entries"]:
@@ -913,62 +1280,58 @@ class StatusBar:
             lines.append(s)
         self.status_label.configure(text="\n".join(lines) if lines else "")
 
-    def apply_settings(self):
-        entries = []
-        for r in self.rows:
-            p = get_provider(r["provider"])
-            entries.append({"provider": r["provider"], "path": r["path"],
-                            "label": r["label"].get().strip() or p.label(r["path"]),
-                            "enabled": r["enabled"].get(),
-                            "windows": {"5h": r["w5h"].get(), "7d": r["w7d"].get()}})
-        try:
-            slide_sec = max(5, min(3600, int(self.v_slide_sec.get())))
-        except Exception:
-            slide_sec = 30
-        names = [t("lang_auto")] + [LANG_NAMES[c] for c in SUPPORTED]
-        language = self.lang_codes[names.index(self.v_lang.get())] if self.v_lang.get() in names else "auto"
-        lang_changed = language != self.settings["language"]
-        fixed = next((k for k, n in self.fixed_choices if n == self.v_fixed.get()), "")
-        self.settings = {
-            "entries": entries, "display_mode": self.v_mode.get(), "slide_sec": slide_sec, "fixed_entry": fixed,
-            "show_scoped": self.v_scoped.get(),
-            "style": {"badge": self.v_badge.get(), "label": self.v_label.get(), "bars": self.v_bars.get(),
-                      "badge_color": self.v_badge_color.get(), "label_color": self.v_label_color.get()},
-            "language": language, "data_source": self.v_ds.get(),
-            "official_hide_unsupported": self.v_hide.get(),
-            "seen_providers": [p.id for p in PROVIDERS],
-        }
+    # --- 저장 / 닫기 ---
+    def apply_settings(self, close=False):
+        """저장 + 바에 즉시 반영. close=False 면 창은 그대로 두고 «저장됨 ✓» 만 잠깐 보여준다."""
+        new = self.form_settings()
+        lang_changed = new["language"] != self.settings["language"]
+        self.settings = new
         save_settings(self.settings)
         try:
             set_autostart(self.v_auto.get())
         except Exception as e:
             tb.message_box(t("autostart_failed", e=e), APP_TITLE, 0x30)
+        self._baseline = self.snapshot()
         first = not self.started
-        self.close_settings()
-        self.close_help()
-        if lang_changed:                              # 메뉴·트레이·바를 새 언어로
-            set_language(language)
+        if lang_changed:
+            set_language(new["language"])
             self.menu = self.build_menu()
             self.update_tray()
         if first:
+            self.close_settings(force=True)
+            self.close_help()
             self.start()
-        else:
-            self.cur = 0
-            self.data = {}                            # 원본이 바뀌었을 수 있으니 옛 값은 버린다
-            self.schedule_cycle()
-            self.refresh_async()
-            self.relayout(force=True)
-        if lang_changed and not first:
-            self.root.after(150, self.open_settings)   # 바뀐 언어로 설정 창을 다시 연다
+            return
+        self.cur = 0
+        self.data = {k: v for k, v in self.data.items()}   # 값은 유지, 원본이 바뀌었으면 다음 조회가 덮어쓴다
+        self.schedule_cycle()
+        self.refresh_async()
+        self.relayout(force=True)
+        if lang_changed:                                   # 바뀐 언어로 설정 창을 다시 연다
+            tab = self.nb.index(self.nb.select()) if self.settings_win else 0
+            self.close_settings(force=True)
+            self.close_help()
+            self.root.after(100, lambda: self.open_settings(tab=tab))
+            return
+        if close:
+            self.close_settings(force=True)
+            return
+        self.fill_status()
+        self.saved_label.configure(text=t("btn_saved"))
+        self.root.after(2000, lambda: self.saved_label.configure(text="") if self.settings_win else None)
 
-    def close_settings(self):
-        if self.settings_win:
-            try:
-                self.settings_win.unbind_all("<MouseWheel>")
-            except Exception:
-                pass
-            self.settings_win.destroy()
-            self.settings_win = None
+    def close_settings(self, force=False):
+        if not self.settings_win:
+            return
+        if not force and not getattr(self, "install_mode", False) and self.is_dirty():
+            r = messagebox.askyesnocancel(APP_TITLE, t("unsaved_prompt"), parent=self.settings_win)
+            if r is None:
+                return
+            if r:
+                self.apply_settings(close=True)
+                return
+        self.settings_win.destroy()
+        self.settings_win = None
 
     # --- «계정이 안 보여요?» 안내 창 ---
     def open_help(self):

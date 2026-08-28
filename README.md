@@ -25,10 +25,12 @@ Claude work   5h ▬▬▬░░░░░ 23% ↺12:09   │   Codex work   5h �
 
 ## 특징
 
-- **2줄 표시** — 위 5시간, 아래 주간. 리셋 시각은 「몇 분 후」가 아니라 이 PC 현지 시각(`↺12:10`, 오늘이 아니면 `↺09/01 13:00`).
+- **2줄 표시, 필요한 정보만** — 위 5시간, 아래 주간. 리셋 시각은 「몇 분 후」가 아니라 이 PC 현지 시각(`↺12:10`, 오늘이 아니면 `↺09/01 13:00`).
+  서비스·계정·폴더·플랜·마지막 조회는 바에 **마우스를 올리면 툴팁**으로 보입니다 — 바 자체에는 글자를 더 얹지 않습니다.
 - **색** — 초록(<50%) · 노랑(50~79%) · 빨강(80%+). 80% / 95% 를 넘는 순간 알림 1회.
 - **표시 방식 커스텀** — 모든 항목 동시에 / 클릭으로 전환 / 자동 슬라이드(주기 설정) / 하나 고정. 항목 순서·라벨·창(5h/7d) 선택.
-- **스타일** — 서비스 배지(Claude/Codex)·계정 라벨 on/off, 막대 «자동 / 막대+숫자 / 숫자만», 배지·라벨 색.
+- **스타일** — 계정 라벨 on/off(기본 off), 막대 «자동 / 막대+숫자 / 숫자만», 라벨 색.
+- **설정 창 = 라이브 미리보기 + 프리셋** — 어떤 값을 바꿔도 위쪽 미리보기가 즉시 다시 그려지고, «기본 / 미니멀 / 라벨 포함 / 풀 정보 / 슬라이드 / 고정» 카드를 누르면 한 번에 적용됩니다. «저장» 은 적용만 하고 창은 남습니다(닫기는 따로).
 - **배경 투명** — 글자·막대만 그려지고, 나머지 영역은 클릭이 작업 표시줄로 통과합니다.
 - **빈 공간 자동 배치** — 작업 표시줄을 캡처해 실제로 비어 있는 열을 찾고, 그중 가장 왼쪽에 놓습니다. 해상도·DPI·정렬·위젯·앱 수가 달라도 같은 코드가 돕니다.
 - **폭에 따라 3단계** — 막대+숫자 → 숫자만 → `›` 버튼(누르면 위로 상세 팝업).
@@ -75,7 +77,8 @@ Claude work   5h ▬▬▬░░░░░ 23% ↺12:09   │   Codex work   5h �
   «계정이 안 보여요?» 가 서비스별로 안 뜨는 이유를 설명합니다.
 - **데이터 원본** — 비공식 API(5분마다) 또는 공식 모드(아래 절). 공식 모드에서 공식 데이터가 없는 항목(Codex)은 숨길 수 있습니다.
 - **표시 방식** — 모든 항목 동시에 / 클릭으로 전환 / 자동 슬라이드(5~3600초) / 하나 고정(항목 선택).
-- **스타일** — 배지·라벨 표시, 막대 «자동/막대+숫자/숫자만», 배지 색·라벨 색, 모델별 한도 표시.
+- **표시 · 스타일 탭** — 프리셋 카드(미리보기 그림 포함) · 표시 방식 · 라벨 표시 · 막대 «자동/막대+숫자/숫자만» · 라벨 색 · 모델별 한도 표시. 맨 위 미리보기는 현재 폼 값을 그대로 그립니다(값이 없으면 예시값).
+- **저장** — 적용하고 창은 그대로(«저장됨 ✓»). 저장하지 않고 닫으면 저장/버리기/취소를 묻습니다.
 - **시작** — Windows 로그인 시 자동 시작 (시작프로그램 폴더 바로가기, 관리자 권한 불필요).
 - **언어** — 시스템 기본 / 5개 언어.
 
@@ -202,6 +205,10 @@ $env:CODEX_HOME = "$HOME\.codex-b"; codex login            # Codex 두 번째 �
 
 쓸모 있었다면 ⭐ 하나, 또는 [GitHub Sponsors](https://github.com/sponsors/YeoJeongHun1) 로 커피 한 잔 부탁드립니다. 바 안에 광고는 넣지 않습니다.
 
+## 상표 고지
+
+Claude·Anthropic·OpenAI·ChatGPT·Codex 는 각 회사의 상표입니다. 이 앱은 서비스 식별 목적으로 **이름만** 표시하며 로고를 쓰지 않습니다. 두 회사와 무관한 개인 오픈소스입니다.
+
 ## 라이선스
 
 MIT
@@ -210,7 +217,7 @@ MIT
 
 # English
 
-> **An independent open-source project, unaffiliated with Anthropic, OpenAI, GitHub or any other company.** Service names are their owners' trademarks.
+> **An independent open-source project, unaffiliated with Anthropic, OpenAI, GitHub or any other company.** Claude, Anthropic, OpenAI, ChatGPT and Codex are trademarks of their respective owners; names are shown only to identify the service, no logos are used.
 
 A tiny Windows utility that shows your **AI subscription usage (5-hour / weekly limits)** in the empty area of the taskbar — always visible, no settings page to open.
 
@@ -221,7 +228,9 @@ A tiny Windows utility that shows your **AI subscription usage (5-hour / weekly 
 
 - Two lines per entry (5h / weekly) with bars, percentages and the **local reset time**; entry = service × account, several accounts per service supported.
 - **Display modes**: all entries at once / switch on click / auto slide (interval) / pin one. Per-entry order, label, and which windows to show.
-- **Style**: service badge and account label on/off, bars «auto / bars+numbers / numbers only», badge and label colors.
+- **Only what matters on the bar**: service, account, folder, plan and last fetch appear in a **hover tooltip**, not on the bar itself.
+- **Style**: account label on/off (off by default), bars «auto / bars+numbers / numbers only», label color.
+- **Settings = live preview + presets**: every change redraws the preview at the top instantly; preset cards (Default / Minimal / With labels / Full info / Slide / Pinned) apply a whole look at once. **Save** applies and keeps the window open; closing with unsaved changes asks.
 - Transparent, click-through background; **auto-placement** by measuring the taskbar's empty columns; shrinks to numbers-only, then to a `›` button with a popup.
 - No flicker (excluded from screen capture), hides during fullscreen apps, lives as a tray icon (no taskbar button).
 - No Python required — unzip and run. No installer, no registry, no self-copy; "run at login" is one Startup-folder shortcut.
