@@ -213,7 +213,9 @@ class StatusBar:
         self.canvas.bind("<Button-1>", self.on_left)
         self.canvas.bind("<Button-3>", self.on_right)
         self.canvas.bind("<Motion>", self.on_motion)
+        self.canvas.bind("<Enter>", self.on_enter)
         self.canvas.bind("<Leave>", self.on_leave)
+        self.hovering = False                          # 마우스가 바 위에 있는 동안 자동 슬라이드를 멈춘다
         self.tooltip = None
         self.tooltip_job = None
         self.tooltip_entry = None
@@ -317,6 +319,8 @@ class StatusBar:
         if self.cycle_job:
             self.root.after_cancel(self.cycle_job)
             self.cycle_job = None
+        if self.hovering:                              # 바 위에 마우스가 있으면 정지 — Leave 때 주기 전체를 새로 시작
+            return
         if self.settings["display_mode"] == "slide" and len(self.enabled_entries()) > 1:
             self.cycle_job = self.root.after(self.settings["slide_sec"] * 1000, self.next_entry)
 
@@ -656,6 +660,8 @@ class StatusBar:
         return None
 
     def on_motion(self, ev):
+        if not self.hovering:
+            self.on_enter(ev)
         e = self.entry_at(ev.x)
         if e is not self.tooltip_entry:
             self.hide_tooltip()
@@ -668,10 +674,18 @@ class StatusBar:
         elif e is not None and not self.canvas.find_withtag("hover"):
             self.set_hover(e)                          # relayout 이 지운 뒤 다시
 
+    def on_enter(self, ev=None):
+        self.hovering = True
+        if self.cycle_job:                             # 진행 중이던 슬라이드 타이머 취소
+            self.root.after_cancel(self.cycle_job)
+            self.cycle_job = None
+
     def on_leave(self, ev=None):
         self.hide_tooltip()
         self.tooltip_entry = None
         self.set_hover(None)
+        self.hovering = False
+        self.schedule_cycle()                          # 방금 본 항목을 최소 한 주기 더 — 남은 시간이 아니라 주기 전체
 
     def set_hover(self, e):
         """항목 영역에 둥근 하이라이트. 투명 키 색과 다른 색이라 실제로 그려진다."""
@@ -714,7 +728,8 @@ class StatusBar:
             lines.append(t("tt_loading"))
         return "\n".join(lines)
 
-    TIP_W = 260
+    TIP_W_MIN, TIP_W_MAX = 240, 460          # 카드 폭은 내용에 맞춰 자동 (최소·최대). 긴 텍스트는 줄바꿈 대신 카드가 넓어진다
+    TIP_LABEL_MAX = 18                       # 라벨은 여기까지 + … (전체는 설정 «항목» 탭에서)
     PROVIDER_COLOR = {"claude_code": "#D97757", "codex": "#10A37F"}
 
     def show_tooltip(self, e, x_root, y_root=None):
@@ -755,16 +770,14 @@ class StatusBar:
         p = get_provider(e["provider"])
         d = self.data.get(entry_key(e)) or {}
         u = d.get("usage")
-        W, pad, line = self.px(self.TIP_W), self.px(12), self.px(20)
-        rows = 2 + (len(u["windows"]) if u else 1) + (1 if u and u.get("scoped") and self.settings["show_scoped"] else 0) + 1
+        pad, line = self.px(12), self.px(20)
+        rows = 1 + (len(u["windows"]) if u else 1) + (1 if u and u.get("scoped") and self.settings["show_scoped"] else 0) + 1
         H = pad * 2 + rows * line + self.px(6)
         c.delete("all")
-        c.create_polygon(*rounded_points(1, 1, W - 1, H - 1, self.px(9)), fill="#1e1e1e", outline="#444444", width=1, smooth=False)
         y = pad + line // 2
         x = self.chip(c, pad, y, p.name, self.PROVIDER_COLOR.get(p.id, "#555555"))
-        c.create_text(x + self.px(8), y, text=e["label"], fill="#ffffff", font=self.font(10, True), anchor="w")
-        y += line
-        c.create_text(pad, y, text=e["path"], fill="#9a9a9a", font=self.font(8), anchor="w")
+        label = e["label"] if len(e["label"]) <= self.TIP_LABEL_MAX else e["label"][:self.TIP_LABEL_MAX] + "…"
+        c.create_text(x + self.px(8), y, text=label, fill="#ffffff", font=self.font(10, True), anchor="w")
         y += line
         if u:
             for w in u["windows"]:
@@ -803,6 +816,10 @@ class StatusBar:
             c.create_text(x, y, text=t("tt_official_ago", m=age) if age >= 1 else t("tt_official"), fill="#9a9a9a", font=self.font(8), anchor="w")
         elif d.get("last_ok"):
             c.create_text(x, y, text=t("tt_fetched_only", time=d["last_ok"].strftime("%H:%M:%S")), fill="#9a9a9a", font=self.font(8), anchor="w")
+        bb = c.bbox("all")
+        W = max(self.px(self.TIP_W_MIN), min(self.px(self.TIP_W_MAX), (bb[2] if bb else 0) + self.px(14)))
+        card = c.create_polygon(*rounded_points(1, 1, W - 1, H - 1, self.px(9)), fill="#1e1e1e", outline="#444444", width=1, smooth=False, tags=("card",))
+        c.tag_lower(card)
         return W, H
 
     def place_tooltip(self, x_root, y_root=None):
