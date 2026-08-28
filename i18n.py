@@ -1,0 +1,705 @@
+"""
+AI Status Bar — 다국어 문자열. 지원: 한국어(ko) · English(en) · 日本語(ja) · Português (Brasil)(pt) · Español(es).
+
+    from i18n import t, set_language
+    set_language("auto")            # Windows 표시 언어를 따른다
+    t("menu_settings")              # → "설정…"
+    t("run_location", dir=path)     # 포맷 인자
+
+키가 없으면 en → 키 이름 순으로 폴백한다. 언어 이름(LANG_NAMES)은 번역하지 않고 각 언어 자국어로 둔다.
+제공자 모듈이 던지는 오류는 «키 [인자]» 문자열이다 — tr_error() 로 번역한다.
+"""
+import ctypes
+
+SUPPORTED = ("ko", "en", "ja", "pt", "es")
+LANG_NAMES = {"ko": "한국어", "en": "English", "ja": "日本語", "pt": "Português (Brasil)", "es": "Español"}
+_current = "en"
+
+
+def detect_language():
+    """Windows 표시 언어의 primary LANGID → 지원 언어 코드. 모르면 en."""
+    try:
+        langid = ctypes.windll.kernel32.GetUserDefaultUILanguage() & 0x3FF
+    except Exception:
+        return "en"
+    return {0x12: "ko", 0x11: "ja", 0x16: "pt", 0x0A: "es"}.get(langid, "en")
+
+
+def set_language(code):
+    global _current
+    _current = detect_language() if code in (None, "", "auto") else (code if code in SUPPORTED else "en")
+    return _current
+
+
+def current_language():
+    return _current
+
+
+def t(key, **kw):
+    s = STRINGS.get(_current, {}).get(key) or STRINGS["en"].get(key) or key
+    try:
+        return s.format(**kw) if kw else s
+    except (KeyError, IndexError):
+        return s
+
+
+def tr_error(msg):
+    """제공자 모듈이 던지는 오류 문자열(키 또는 «키 인자»)을 번역. 키가 아니면 원문 그대로."""
+    if not msg:
+        return ""
+    head, _, rest = msg.partition(" ")
+    if head in STRINGS["en"]:
+        return t(head, x=rest) if rest else t(head)
+    return msg
+
+
+_MULTI_PS = '      $env:CLAUDE_CONFIG_DIR = "$HOME\\.claude-b";  claude        (Claude Code)\n' \
+            '      $env:CODEX_HOME = "$HOME\\.codex-b";  codex login          (Codex)\n'
+
+STRINGS = {
+# ------------------------------------------------------------------ 한국어
+"ko": {
+    "app_desc": "작업 표시줄 빈 공간에 AI 구독 사용량(5시간 / 주간 한도)을 상시 표시합니다 — Claude Code · Codex.",
+    "menu_settings": "설정…",
+    "menu_next": "다음 항목 ⇄",
+    "menu_refresh": "지금 새로고침",
+    "menu_remeasure": "빈 공간 다시 재기",
+    "menu_usage_page": "{name} 사용량 페이지 열기",
+    "menu_readme": "사용 방법 (GitHub README)",
+    "menu_support": "☕ 개발자 응원하기",
+    "menu_quit": "종료",
+    "bar_no_entries": "계정 없음 — 설정에서 Claude Code / Codex 폴더를 지정하세요",
+    "bar_pick_items": "설정에서 표시할 창(5h/7d)을 고르세요",
+    "bar_loading": "조회 중…",
+    "tray_no_entries": "계정 없음 — 설정에서 지정",
+    "stale_ago": "({m}분 전)",
+    "window_5h": "5시간",
+    "window_7d": "7일",
+    "alert_limit": "[{label}] {window} 한도 {pct}% — 리셋 {reset}",
+    "win_settings": "설정",
+    "win_setup": "시작 설정",
+    "sec_entries": " 항목 (서비스 × 계정 폴더) ",
+    "col_show": "표시",
+    "col_provider": "서비스",
+    "col_label": "라벨",
+    "col_folder": "계정 폴더",
+    "col_windows": "창",
+    "col_statusline": "상태줄 연결",
+    "col_order": "순서",
+    "btn_add_folder": "폴더 추가…",
+    "btn_rescan": "다시 탐색",
+    "btn_why_missing": "계정이 안 보여요?",
+    "btn_recheck": "연결 다시 확인",
+    "btn_ok": "확인",
+    "btn_cancel": "취소",
+    "hint_autodiscover": "자동 탐색 — Claude Code: CLAUDE_CONFIG_DIR + 홈의 .claude* 중 .credentials.json 이 있는 것 · Codex: CODEX_HOME + 홈의 .codex* 중 auth.json 이 있는 것",
+    "no_entries_row": "항목이 없습니다 — 로그인했다면 «다시 탐색», 다른 폴더면 «폴더 추가…», 이유는 «계정이 안 보여요?»",
+    "pick_provider_title": "어느 서비스의 폴더인가요?",
+    "pick_provider_body": "추가할 계정 폴더의 서비스를 고르세요.",
+    "dialog_pick_folder": "{name} 계정 폴더 선택 ({file} 이 있는 폴더)",
+    "dup_folder": "이미 목록에 있는 폴더입니다.",
+    "no_cred_confirm": "이 폴더에 {file} 이 없습니다.\n{name} 로 그 폴더에서 로그인하면 생깁니다.\n\n그래도 추가할까요?",
+    "rescan_found": "다시 탐색: 새로 찾은 계정 {n}개",
+    "rescan_none": "다시 탐색: 새 계정 없음",
+    "sec_data_source": " 데이터 원본 ",
+    "ds_api": "비공식 API — 실시간. 5분마다 각 서비스에 조회 (Claude: api.anthropic.com · Codex: chatgpt.com)",
+    "ds_official": "공식 모드 — Claude Code 상태줄 데이터만 사용. 네트워크 접속 0. Claude Code 세션이 떠 있는 동안만 갱신 (계정별 «상태줄 연결 설치» 필요). Codex 는 공식 데이터가 없어 표시되지 않습니다",
+    "ds_hide_unsupported": "공식 모드에서 공식 데이터가 없는 항목(Codex)은 숨기기",
+    "sec_display": " 표시 방식 ",
+    "mode_all": "모든 항목을 동시에",
+    "mode_click": "클릭으로 전환 (한 항목씩, 바를 클릭하거나 ⇄)",
+    "mode_slide": "자동 슬라이드 (한 항목씩, 주기마다 다음으로; 클릭도 됨)",
+    "mode_fixed": "하나만 고정",
+    "slide_hint_pre": "슬라이드 주기",
+    "slide_hint": "초 (자동 슬라이드 모드에서만)",
+    "fixed_hint": "고정할 항목",
+    "sec_style": " 스타일 ",
+    "style_badge": "서비스 배지 (Claude / Codex) 표시",
+    "style_label": "계정 라벨 표시 (항목이 2개 이상일 때)",
+    "style_bars": "막대:",
+    "style_bars_auto": "자동 (공간 따라)",
+    "style_bars_bars": "막대 + 숫자",
+    "style_bars_numbers": "숫자만",
+    "style_badge_color": "배지 색",
+    "style_label_color": "라벨 색",
+    "style_pick": "고르기…",
+    "style_reset": "기본",
+    "item_scoped": "모델별 한도 표시 (Claude 의 Fable 등 — 비공식 API 에서만)",
+    "sec_startup": " 시작 ",
+    "autostart": "Windows 에 로그인할 때 자동으로 시작",
+    "run_location": "실행 위치: {dir}\n제거하려면 자동 시작을 끄고 이 폴더를 지우면 됩니다 (레지스트리·시스템 폴더를 건드리지 않습니다).",
+    "sec_language": " 언어 / Language ",
+    "lang_auto": "시스템 기본",
+    "link_readme": "사용 방법 · 동작 방식(어떤 API 를 어떻게 부르는지) · 문제 신고 — GitHub README 열기",
+    "unofficial_note": "※ 비공식 API 모드는 각 서비스가 문서화하지 않은 엔드포인트를 씁니다. 토큰은 그 서비스 외 어디로도 보내지 않습니다.\n※ 이 앱은 Anthropic·OpenAI 와 무관한 개인 오픈소스입니다.",
+    "btn_start": "시작",
+    "btn_save": "저장",
+    "btn_close": "닫기",
+    "status_connected": "●  {label} ({name}): 연결됨 — {plan}, 토큰 만료 {exp}",
+    "status_disconnected": "○  {label} ({name}): 연결 안 됨 — {reason}",
+    "status_error": "  ⚠ {err}",
+    "status_last_ok": "  (조회 {time} 성공)",
+    "status_statusline_on": "  [상태줄 연결됨]",
+    "autostart_failed": "자동 시작 설정에 실패했습니다: {e}",
+    "help_title": "내 계정이 목록에 안 떠요",
+    "help_intro": (
+        "이 앱이 «계정»으로 보는 것은 각 서비스의 CLI 가 로그인 정보를 저장하는 폴더 안의 파일입니다.\n"
+        "그 파일은 CLI(터미널 앱)로 로그인해야 생깁니다. 웹·데스크톱 앱만 쓰면 생기지 않습니다."
+    ),
+    "help_claude_body": (
+        "파일: <설정 폴더>\\.credentials.json  (기본 폴더 %USERPROFILE%\\.claude)\n"
+        "  ①  이 PC 에서 Claude Code 로 로그인한 적이 없다 → 터미널에서 claude 를 실행해 로그인하세요.\n"
+        "  ②  같은 폴더에서 /login 으로 계정을 바꿔 가며 쓴다 → 파일에는 마지막 계정 하나만 남습니다.\n"
+        "  ③  claude setup-token + CLAUDE_CODE_OAUTH_TOKEN 환경변수 방식 → 토큰이 파일로 저장되지 않아 볼 수 없습니다 (지원 안 함).\n"
+        "  ④  설정 폴더가 기본 위치 밖에 있다(CLAUDE_CONFIG_DIR) → «폴더 추가…» 로 직접 지정하세요.\n"
+        "  macOS 는 키체인에 저장돼 파일이 없습니다 — 이 앱은 Windows 전용입니다."
+    ),
+    "help_codex_body": (
+        "파일: <설정 폴더>\\auth.json  (기본 폴더 %USERPROFILE%\\.codex)\n"
+        "  ①  이 PC 에서 codex login 을 한 적이 없다 → 터미널에서 codex login 으로 ChatGPT 계정 로그인.\n"
+        "  ②  API 키 방식(auth_mode = apikey, OPENAI_API_KEY)으로 쓴다 → 5시간/주간 창이 없어 표시할 것이 없습니다 (지원 안 함).\n"
+        "  ③  설정 폴더가 기본 위치 밖에 있다(CODEX_HOME) → «폴더 추가…» 로 직접 지정하세요.\n"
+        "  토큰이 오래되면 «⚠ 로그인 갱신 필요» 가 뜹니다 — codex 를 한 번 실행하면 CLI 가 갱신합니다."
+    ),
+    "help_multi_title": "계정을 여러 개 동시에 쓰려면",
+    "help_multi_body": (
+        "계정마다 폴더를 나누세요. PowerShell 에서:\n" + _MULTI_PS +
+        "이렇게 두 번째 계정으로 로그인하면 그 폴더에 파일이 생기고, «다시 탐색» 을 누르면 목록에 잡힙니다."
+    ),
+    "btn_statusline_install": "상태줄 연결 설치",
+    "btn_statusline_uninstall": "상태줄 연결 해제",
+    "statusline_confirm_install": "이 계정의 Claude Code 설정 파일을 수정합니다:\n{path}\n\n먼저 백업을 만듭니다:\n{backup}\n\nstatusLine 을 이 앱의 내보내기 스크립트로 바꾸고, 원래 statusLine 은 이 앱 폴더에 보관했다가 «해제» 때 복원합니다.\n새 Claude Code 세션부터 적용됩니다. 계속할까요?",
+    "statusline_confirm_uninstall": "이 계정의 Claude Code 설정 파일에서 상태줄 연결을 해제합니다:\n{path}\n\n원래 statusLine 을 복원합니다 (없었다면 키를 제거). 계속할까요?",
+    "statusline_done_install": "설치했습니다. 새 Claude Code 세션을 열면 그때부터 데이터가 들어옵니다.\n백업: {backup}",
+    "statusline_done_uninstall": "해제했습니다. 원래 설정으로 돌아갔습니다.",
+    "statusline_failed": "상태줄 연결 처리에 실패했습니다: {e}",
+    "err_no_token": "Claude Code 로그인 필요 (토큰 파일 없음)",
+    "err_token_read": "로그인 파일을 읽을 수 없음: {x}",
+    "err_token_expired": "토큰 만료 — Claude Code 를 한 번 실행하면 갱신됩니다",
+    "err_401": "401 — 토큰이 거부됨. Claude Code 를 실행해 재로그인/갱신 필요",
+    "err_http": "HTTP {x}",
+    "err_official_missing": "상태줄 데이터 없음 — «상태줄 연결 설치» 후 Claude Code 세션을 여세요",
+    "err_official_nodata": "상태줄에 아직 사용량이 없음 — Claude Code 에서 첫 응답을 받으면 들어옵니다",
+    "err_official_unsupported": "공식 데이터 없음 (이 서비스는 비공식 API 에서만)",
+    "err_codex_no_auth": "Codex 로그인 필요 (auth.json 없음) — 터미널에서 codex login",
+    "err_codex_apikey": "Codex 가 API 키 방식 — 사용량 창이 없어 지원하지 않음",
+    "err_codex_401": "Codex 로그인 갱신 필요 — codex 를 한 번 실행하세요",
+    "err_codex_nodata": "Codex 응답에 사용량 창이 없음",
+},
+# ------------------------------------------------------------------ English
+"en": {
+    "app_desc": "Shows your AI subscription usage (5-hour / weekly limits) in the empty area of the taskbar — Claude Code · Codex.",
+    "menu_settings": "Settings…",
+    "menu_next": "Next entry ⇄",
+    "menu_refresh": "Refresh now",
+    "menu_remeasure": "Re-measure free space",
+    "menu_usage_page": "Open {name} usage page",
+    "menu_readme": "How to use (GitHub README)",
+    "menu_support": "☕ Support the developer",
+    "menu_quit": "Quit",
+    "bar_no_entries": "No accounts — add a Claude Code / Codex folder in Settings",
+    "bar_pick_items": "Pick windows (5h/7d) to show in Settings",
+    "bar_loading": "Loading…",
+    "tray_no_entries": "No accounts — add one in Settings",
+    "stale_ago": "({m} min ago)",
+    "window_5h": "5-hour",
+    "window_7d": "7-day",
+    "alert_limit": "[{label}] {window} limit at {pct}% — resets {reset}",
+    "win_settings": "Settings",
+    "win_setup": "First-run setup",
+    "sec_entries": " Entries (service × account folder) ",
+    "col_show": "Show",
+    "col_provider": "Service",
+    "col_label": "Label",
+    "col_folder": "Account folder",
+    "col_windows": "Windows",
+    "col_statusline": "Status line link",
+    "col_order": "Order",
+    "btn_add_folder": "Add folder…",
+    "btn_rescan": "Rescan",
+    "btn_why_missing": "Account missing?",
+    "btn_recheck": "Re-check connection",
+    "btn_ok": "OK",
+    "btn_cancel": "Cancel",
+    "hint_autodiscover": "Auto-discovery — Claude Code: CLAUDE_CONFIG_DIR + .claude* folders in your home containing .credentials.json · Codex: CODEX_HOME + .codex* folders containing auth.json",
+    "no_entries_row": "No entries — «Rescan» if you have logged in, «Add folder…» for another folder, «Account missing?» for why",
+    "pick_provider_title": "Which service is this folder for?",
+    "pick_provider_body": "Choose the service of the account folder you are adding.",
+    "dialog_pick_folder": "Select a {name} account folder (the one containing {file})",
+    "dup_folder": "That folder is already in the list.",
+    "no_cred_confirm": "There is no {file} in this folder.\nIt appears once you log in with {name} using that folder.\n\nAdd it anyway?",
+    "rescan_found": "Rescan: {n} new account(s) found",
+    "rescan_none": "Rescan: no new accounts",
+    "sec_data_source": " Data source ",
+    "ds_api": "Unofficial API — live; queries each service every 5 minutes (Claude: api.anthropic.com · Codex: chatgpt.com)",
+    "ds_official": "Official mode — uses only Claude Code's status-line data. Zero network access. Updates only while a Claude Code session is open (needs «Install status line link» per account). Codex has no official data and is not shown",
+    "ds_hide_unsupported": "In official mode, hide entries without official data (Codex)",
+    "sec_display": " Display ",
+    "mode_all": "All entries at once",
+    "mode_click": "Switch on click (one entry; click the bar or ⇄)",
+    "mode_slide": "Auto slide (one entry; advances every interval; click also works)",
+    "mode_fixed": "Pin one entry",
+    "slide_hint_pre": "Slide interval",
+    "slide_hint": "seconds (auto slide mode only)",
+    "fixed_hint": "Pinned entry",
+    "sec_style": " Style ",
+    "style_badge": "Show service badge (Claude / Codex)",
+    "style_label": "Show account label (when there are 2+ entries)",
+    "style_bars": "Bars:",
+    "style_bars_auto": "Auto (by available space)",
+    "style_bars_bars": "Bars + numbers",
+    "style_bars_numbers": "Numbers only",
+    "style_badge_color": "Badge color",
+    "style_label_color": "Label color",
+    "style_pick": "Pick…",
+    "style_reset": "Default",
+    "item_scoped": "Show per-model caps (e.g. Claude's Fable — unofficial API only)",
+    "sec_startup": " Startup ",
+    "autostart": "Start automatically when I sign in to Windows",
+    "run_location": "Running from: {dir}\nTo remove: turn off autostart and delete this folder (no registry or system folders are touched).",
+    "sec_language": " Language ",
+    "lang_auto": "System default",
+    "link_readme": "How to use · how it works (which API is called, and how) · report a problem — open the GitHub README",
+    "unofficial_note": "※ Unofficial-API mode uses endpoints the services do not document. Your token is sent nowhere but that service.\n※ This app is an independent open-source project, unaffiliated with Anthropic or OpenAI.",
+    "btn_start": "Start",
+    "btn_save": "Save",
+    "btn_close": "Close",
+    "status_connected": "●  {label} ({name}): connected — {plan}, token expires {exp}",
+    "status_disconnected": "○  {label} ({name}): not connected — {reason}",
+    "status_error": "  ⚠ {err}",
+    "status_last_ok": "  (fetched {time} OK)",
+    "status_statusline_on": "  [status line linked]",
+    "autostart_failed": "Could not set autostart: {e}",
+    "help_title": "My account is not in the list",
+    "help_intro": (
+        "What this app treats as an \"account\" is the login file inside the folder where each service's CLI stores it.\n"
+        "That file is created only when you log in with the CLI (the terminal app). Using only the web or desktop app does not create it."
+    ),
+    "help_claude_body": (
+        "File: <config folder>\\.credentials.json  (default folder %USERPROFILE%\\.claude)\n"
+        "  ①  You have never logged in with Claude Code on this PC → run claude in a terminal and log in.\n"
+        "  ②  You switch accounts with /login in the same folder → only the last one is kept in the file.\n"
+        "  ③  You use claude setup-token + the CLAUDE_CODE_OAUTH_TOKEN environment variable → the token is never written to a file (not supported).\n"
+        "  ④  Your config folder is outside the default via CLAUDE_CONFIG_DIR → use «Add folder…».\n"
+        "  On macOS the token lives in the Keychain, not a file — this app is Windows-only."
+    ),
+    "help_codex_body": (
+        "File: <config folder>\\auth.json  (default folder %USERPROFILE%\\.codex)\n"
+        "  ①  You have never run codex login on this PC → run codex login in a terminal with your ChatGPT account.\n"
+        "  ②  You use an API key (auth_mode = apikey, OPENAI_API_KEY) → there are no 5-hour/weekly windows to show (not supported).\n"
+        "  ③  Your config folder is outside the default via CODEX_HOME → use «Add folder…».\n"
+        "  When the token gets old you will see «⚠ login refresh needed» — run codex once and the CLI refreshes it."
+    ),
+    "help_multi_title": "Several accounts at the same time",
+    "help_multi_body": (
+        "Give each account its own folder. In PowerShell:\n" + _MULTI_PS +
+        "Log in there with the second account; the file appears in that folder and «Rescan» picks it up."
+    ),
+    "btn_statusline_install": "Install status line link",
+    "btn_statusline_uninstall": "Remove status line link",
+    "statusline_confirm_install": "This will modify this account's Claude Code settings file:\n{path}\n\nA backup is made first:\n{backup}\n\nstatusLine will point to this app's export script; your original statusLine is kept in this app's folder and restored on «Remove».\nTakes effect in new Claude Code sessions. Continue?",
+    "statusline_confirm_uninstall": "Remove the status line link from this account's Claude Code settings file:\n{path}\n\nThe original statusLine is restored (or the key removed if there was none). Continue?",
+    "statusline_done_install": "Installed. Data arrives once you open a new Claude Code session.\nBackup: {backup}",
+    "statusline_done_uninstall": "Removed. The original settings are back.",
+    "statusline_failed": "Status line link failed: {e}",
+    "err_no_token": "Claude Code login required (no token file)",
+    "err_token_read": "Cannot read the login file: {x}",
+    "err_token_expired": "Token expired — run Claude Code once to refresh it",
+    "err_401": "401 — token rejected. Run Claude Code to log in / refresh",
+    "err_http": "HTTP {x}",
+    "err_official_missing": "No status-line data — «Install status line link», then open a Claude Code session",
+    "err_official_nodata": "No usage in the status line yet — it appears after the first response in Claude Code",
+    "err_official_unsupported": "No official data (this service is available in unofficial-API mode only)",
+    "err_codex_no_auth": "Codex login required (no auth.json) — run codex login in a terminal",
+    "err_codex_apikey": "Codex is in API-key mode — no usage windows, not supported",
+    "err_codex_401": "Codex login refresh needed — run codex once",
+    "err_codex_nodata": "No usage windows in the Codex response",
+},
+# ------------------------------------------------------------------ 日本語
+"ja": {
+    "app_desc": "タスクバーの空きスペースに AI サブスクリプションの使用量 (5時間 / 週間の上限) を常時表示します — Claude Code · Codex。",
+    "menu_settings": "設定…",
+    "menu_next": "次の項目 ⇄",
+    "menu_refresh": "今すぐ更新",
+    "menu_remeasure": "空きスペースを測り直す",
+    "menu_usage_page": "{name} の使用量ページを開く",
+    "menu_readme": "使い方 (GitHub README)",
+    "menu_support": "☕ 開発者を応援する",
+    "menu_quit": "終了",
+    "bar_no_entries": "アカウントなし — 設定で Claude Code / Codex のフォルダーを指定してください",
+    "bar_pick_items": "設定で表示するウィンドウ (5h/7d) を選んでください",
+    "bar_loading": "取得中…",
+    "tray_no_entries": "アカウントなし — 設定で指定",
+    "stale_ago": "({m}分前)",
+    "window_5h": "5時間",
+    "window_7d": "7日間",
+    "alert_limit": "[{label}] {window}の上限 {pct}% — リセット {reset}",
+    "win_settings": "設定",
+    "win_setup": "初期設定",
+    "sec_entries": " 項目 (サービス × アカウントフォルダー) ",
+    "col_show": "表示",
+    "col_provider": "サービス",
+    "col_label": "ラベル",
+    "col_folder": "アカウントフォルダー",
+    "col_windows": "ウィンドウ",
+    "col_statusline": "ステータスライン連携",
+    "col_order": "順序",
+    "btn_add_folder": "フォルダーを追加…",
+    "btn_rescan": "再検索",
+    "btn_why_missing": "アカウントが見つからない?",
+    "btn_recheck": "接続を再確認",
+    "btn_ok": "OK",
+    "btn_cancel": "キャンセル",
+    "hint_autodiscover": "自動検索 — Claude Code: CLAUDE_CONFIG_DIR とホームの .claude* のうち .credentials.json があるもの · Codex: CODEX_HOME とホームの .codex* のうち auth.json があるもの",
+    "no_entries_row": "項目がありません — ログイン済みなら「再検索」、別のフォルダーなら「フォルダーを追加…」、理由は「アカウントが見つからない?」",
+    "pick_provider_title": "どのサービスのフォルダーですか?",
+    "pick_provider_body": "追加するアカウントフォルダーのサービスを選んでください。",
+    "dialog_pick_folder": "{name} のアカウントフォルダーを選択 ({file} があるフォルダー)",
+    "dup_folder": "そのフォルダーはすでに一覧にあります。",
+    "no_cred_confirm": "このフォルダーに {file} がありません。\n{name} でそのフォルダーからログインすると作成されます。\n\nそれでも追加しますか?",
+    "rescan_found": "再検索: 新しいアカウントを {n} 件見つけました",
+    "rescan_none": "再検索: 新しいアカウントはありません",
+    "sec_data_source": " データの取得元 ",
+    "ds_api": "非公式 API — リアルタイム。5分ごとに各サービスへ問い合わせ (Claude: api.anthropic.com · Codex: chatgpt.com)",
+    "ds_official": "公式モード — Claude Code のステータスラインのデータのみ使用。ネットワーク接続なし。Claude Code のセッションが開いている間だけ更新 (アカウントごとに「ステータスライン連携をインストール」が必要)。Codex は公式データがないため表示されません",
+    "ds_hide_unsupported": "公式モードでは公式データのない項目 (Codex) を隠す",
+    "sec_display": " 表示方法 ",
+    "mode_all": "すべての項目を同時に",
+    "mode_click": "クリックで切替 (1項目ずつ、バーをクリックまたは ⇄)",
+    "mode_slide": "自動スライド (1項目ずつ、一定間隔で次へ。クリックでも切替)",
+    "mode_fixed": "1つに固定",
+    "slide_hint_pre": "スライド間隔",
+    "slide_hint": "秒 (自動スライドのときのみ)",
+    "fixed_hint": "固定する項目",
+    "sec_style": " スタイル ",
+    "style_badge": "サービスのバッジ (Claude / Codex) を表示",
+    "style_label": "アカウントのラベルを表示 (項目が2つ以上のとき)",
+    "style_bars": "バー:",
+    "style_bars_auto": "自動 (空きスペースに応じて)",
+    "style_bars_bars": "バー + 数値",
+    "style_bars_numbers": "数値のみ",
+    "style_badge_color": "バッジの色",
+    "style_label_color": "ラベルの色",
+    "style_pick": "選択…",
+    "style_reset": "既定",
+    "item_scoped": "モデル別の上限を表示 (Claude の Fable など — 非公式 API のみ)",
+    "sec_startup": " スタートアップ ",
+    "autostart": "Windows にサインインしたとき自動的に起動する",
+    "run_location": "実行場所: {dir}\n削除するには、自動起動をオフにしてこのフォルダーを削除してください (レジストリやシステムフォルダーには触れません)。",
+    "sec_language": " 言語 / Language ",
+    "lang_auto": "システムの既定",
+    "link_readme": "使い方 · 仕組み (どの API をどう呼ぶか) · 問題の報告 — GitHub README を開く",
+    "unofficial_note": "※ 非公式 API モードは各サービスが文書化していないエンドポイントを使用します。トークンはそのサービス以外には送信しません。\n※ このアプリは Anthropic・OpenAI とは無関係の個人オープンソースです。",
+    "btn_start": "開始",
+    "btn_save": "保存",
+    "btn_close": "閉じる",
+    "status_connected": "●  {label} ({name}): 接続済み — {plan}、トークン期限 {exp}",
+    "status_disconnected": "○  {label} ({name}): 未接続 — {reason}",
+    "status_error": "  ⚠ {err}",
+    "status_last_ok": "  (取得 {time} 成功)",
+    "status_statusline_on": "  [ステータスライン連携済み]",
+    "autostart_failed": "自動起動の設定に失敗しました: {e}",
+    "help_title": "アカウントが一覧に出てこない",
+    "help_intro": (
+        "このアプリが「アカウント」として扱うのは、各サービスの CLI がログイン情報を保存するフォルダー内のファイルです。\n"
+        "そのファイルは CLI (ターミナルアプリ) でログインしたときだけ作成されます。Web やデスクトップアプリだけでは作成されません。"
+    ),
+    "help_claude_body": (
+        "ファイル: <設定フォルダー>\\.credentials.json  (既定フォルダー %USERPROFILE%\\.claude)\n"
+        "  ①  この PC で Claude Code にログインしたことがない → ターミナルで claude を実行してログインしてください。\n"
+        "  ②  同じフォルダーで /login を使ってアカウントを切り替えている → ファイルには最後のアカウントだけが残ります。\n"
+        "  ③  claude setup-token と環境変数 CLAUDE_CODE_OAUTH_TOKEN を使っている → トークンがファイルに保存されないため見えません (非対応)。\n"
+        "  ④  設定フォルダーが既定以外にある (CLAUDE_CONFIG_DIR) → 「フォルダーを追加…」で指定してください。\n"
+        "  macOS はトークンをキーチェーンに保存するためファイルがありません — このアプリは Windows 専用です。"
+    ),
+    "help_codex_body": (
+        "ファイル: <設定フォルダー>\\auth.json  (既定フォルダー %USERPROFILE%\\.codex)\n"
+        "  ①  この PC で codex login を実行したことがない → ターミナルで codex login を実行し ChatGPT アカウントでログイン。\n"
+        "  ②  API キー方式 (auth_mode = apikey、OPENAI_API_KEY) を使っている → 5時間/週間のウィンドウがなく表示するものがありません (非対応)。\n"
+        "  ③  設定フォルダーが既定以外にある (CODEX_HOME) → 「フォルダーを追加…」で指定してください。\n"
+        "  トークンが古くなると「⚠ ログインの更新が必要」と表示されます — codex を一度実行すると CLI が更新します。"
+    ),
+    "help_multi_title": "複数のアカウントを同時に使うには",
+    "help_multi_body": (
+        "アカウントごとにフォルダーを分けます。PowerShell で:\n" + _MULTI_PS +
+        "こうして 2 つ目のアカウントでログインするとそのフォルダーにファイルが作成され、「再検索」で一覧に入ります。"
+    ),
+    "btn_statusline_install": "ステータスライン連携をインストール",
+    "btn_statusline_uninstall": "ステータスライン連携を解除",
+    "statusline_confirm_install": "このアカウントの Claude Code 設定ファイルを変更します:\n{path}\n\n先にバックアップを作成します:\n{backup}\n\nstatusLine をこのアプリのエクスポートスクリプトに置き換え、元の statusLine はこのアプリのフォルダーに保管して「解除」時に復元します。\n新しい Claude Code セッションから有効になります。続行しますか?",
+    "statusline_confirm_uninstall": "このアカウントの Claude Code 設定ファイルからステータスライン連携を解除します:\n{path}\n\n元の statusLine を復元します (なかった場合はキーを削除)。続行しますか?",
+    "statusline_done_install": "インストールしました。新しい Claude Code セッションを開くとデータが届きます。\nバックアップ: {backup}",
+    "statusline_done_uninstall": "解除しました。元の設定に戻りました。",
+    "statusline_failed": "ステータスライン連携の処理に失敗しました: {e}",
+    "err_no_token": "Claude Code へのログインが必要です (トークンファイルなし)",
+    "err_token_read": "ログインファイルを読めません: {x}",
+    "err_token_expired": "トークン期限切れ — Claude Code を一度実行すると更新されます",
+    "err_401": "401 — トークンが拒否されました。Claude Code でログイン/更新してください",
+    "err_http": "HTTP {x}",
+    "err_official_missing": "ステータスラインのデータなし — 「ステータスライン連携をインストール」してから Claude Code のセッションを開いてください",
+    "err_official_nodata": "ステータスラインにまだ使用量がありません — Claude Code で最初の応答を受け取ると届きます",
+    "err_official_unsupported": "公式データなし (このサービスは非公式 API モードのみ)",
+    "err_codex_no_auth": "Codex へのログインが必要です (auth.json なし) — ターミナルで codex login",
+    "err_codex_apikey": "Codex が API キー方式です — 使用量ウィンドウがなく非対応",
+    "err_codex_401": "Codex のログイン更新が必要です — codex を一度実行してください",
+    "err_codex_nodata": "Codex の応答に使用量ウィンドウがありません",
+},
+# ------------------------------------------------------------------ Português (Brasil)
+"pt": {
+    "app_desc": "Mostra o uso das suas assinaturas de IA (limites de 5 horas / semanal) no espaço vazio da barra de tarefas — Claude Code · Codex.",
+    "menu_settings": "Configurações…",
+    "menu_next": "Próximo item ⇄",
+    "menu_refresh": "Atualizar agora",
+    "menu_remeasure": "Medir o espaço livre de novo",
+    "menu_usage_page": "Abrir a página de uso do {name}",
+    "menu_readme": "Como usar (README no GitHub)",
+    "menu_support": "☕ Apoiar o desenvolvedor",
+    "menu_quit": "Sair",
+    "bar_no_entries": "Nenhuma conta — adicione a pasta do Claude Code / Codex nas Configurações",
+    "bar_pick_items": "Escolha as janelas (5h/7d) a mostrar nas Configurações",
+    "bar_loading": "Carregando…",
+    "tray_no_entries": "Nenhuma conta — adicione uma nas Configurações",
+    "stale_ago": "(há {m} min)",
+    "window_5h": "5 horas",
+    "window_7d": "7 dias",
+    "alert_limit": "[{label}] limite de {window} em {pct}% — reinicia {reset}",
+    "win_settings": "Configurações",
+    "win_setup": "Primeira configuração",
+    "sec_entries": " Itens (serviço × pasta da conta) ",
+    "col_show": "Mostrar",
+    "col_provider": "Serviço",
+    "col_label": "Rótulo",
+    "col_folder": "Pasta da conta",
+    "col_windows": "Janelas",
+    "col_statusline": "Vínculo com a status line",
+    "col_order": "Ordem",
+    "btn_add_folder": "Adicionar pasta…",
+    "btn_rescan": "Procurar de novo",
+    "btn_why_missing": "Conta não aparece?",
+    "btn_recheck": "Verificar conexão de novo",
+    "btn_ok": "OK",
+    "btn_cancel": "Cancelar",
+    "hint_autodiscover": "Busca automática — Claude Code: CLAUDE_CONFIG_DIR + pastas .claude* na sua pasta pessoal com .credentials.json · Codex: CODEX_HOME + pastas .codex* com auth.json",
+    "no_entries_row": "Nenhum item — «Procurar de novo» se você já fez login, «Adicionar pasta…» para outra pasta, «Conta não aparece?» para saber por quê",
+    "pick_provider_title": "Esta pasta é de qual serviço?",
+    "pick_provider_body": "Escolha o serviço da pasta de conta que você vai adicionar.",
+    "dialog_pick_folder": "Selecione a pasta da conta do {name} (a que contém {file})",
+    "dup_folder": "Essa pasta já está na lista.",
+    "no_cred_confirm": "Não há {file} nesta pasta.\nEle aparece quando você faz login no {name} usando esta pasta.\n\nAdicionar mesmo assim?",
+    "rescan_found": "Busca: {n} conta(s) nova(s) encontrada(s)",
+    "rescan_none": "Busca: nenhuma conta nova",
+    "sec_data_source": " Fonte dos dados ",
+    "ds_api": "API não oficial — em tempo real; consulta cada serviço a cada 5 minutos (Claude: api.anthropic.com · Codex: chatgpt.com)",
+    "ds_official": "Modo oficial — usa só os dados da status line do Claude Code. Zero acesso à rede. Atualiza apenas enquanto uma sessão do Claude Code está aberta (requer «Instalar vínculo com a status line» por conta). O Codex não tem dados oficiais e não é mostrado",
+    "ds_hide_unsupported": "No modo oficial, ocultar itens sem dados oficiais (Codex)",
+    "sec_display": " Exibição ",
+    "mode_all": "Todos os itens ao mesmo tempo",
+    "mode_click": "Trocar ao clicar (um item; clique na barra ou em ⇄)",
+    "mode_slide": "Slide automático (um item; avança a cada intervalo; clicar também funciona)",
+    "mode_fixed": "Fixar um item",
+    "slide_hint_pre": "Intervalo do slide",
+    "slide_hint": "segundos (só no modo slide automático)",
+    "fixed_hint": "Item fixado",
+    "sec_style": " Estilo ",
+    "style_badge": "Mostrar o selo do serviço (Claude / Codex)",
+    "style_label": "Mostrar o rótulo da conta (quando há 2+ itens)",
+    "style_bars": "Barras:",
+    "style_bars_auto": "Automático (conforme o espaço)",
+    "style_bars_bars": "Barras + números",
+    "style_bars_numbers": "Só números",
+    "style_badge_color": "Cor do selo",
+    "style_label_color": "Cor do rótulo",
+    "style_pick": "Escolher…",
+    "style_reset": "Padrão",
+    "item_scoped": "Mostrar limites por modelo (ex.: Fable do Claude — só na API não oficial)",
+    "sec_startup": " Inicialização ",
+    "autostart": "Iniciar automaticamente ao entrar no Windows",
+    "run_location": "Executando em: {dir}\nPara remover: desative a inicialização automática e apague esta pasta (não mexe no registro nem em pastas do sistema).",
+    "sec_language": " Idioma / Language ",
+    "lang_auto": "Padrão do sistema",
+    "link_readme": "Como usar · como funciona (qual API é chamada e como) · relatar um problema — abrir o README no GitHub",
+    "unofficial_note": "※ O modo API não oficial usa endpoints que os serviços não documentam. Seu token é enviado apenas para aquele serviço.\n※ Este app é um projeto open source independente, sem ligação com a Anthropic ou a OpenAI.",
+    "btn_start": "Iniciar",
+    "btn_save": "Salvar",
+    "btn_close": "Fechar",
+    "status_connected": "●  {label} ({name}): conectada — {plan}, token expira {exp}",
+    "status_disconnected": "○  {label} ({name}): não conectada — {reason}",
+    "status_error": "  ⚠ {err}",
+    "status_last_ok": "  (obtido {time} OK)",
+    "status_statusline_on": "  [status line vinculada]",
+    "autostart_failed": "Não foi possível configurar a inicialização automática: {e}",
+    "help_title": "Minha conta não está na lista",
+    "help_intro": (
+        "O que este app considera uma \"conta\" é o arquivo de login dentro da pasta onde a CLI de cada serviço o guarda.\n"
+        "Esse arquivo só é criado quando você faz login pela CLI (o app de terminal). Usar só a web ou o app de desktop não o cria."
+    ),
+    "help_claude_body": (
+        "Arquivo: <pasta de configuração>\\.credentials.json  (pasta padrão %USERPROFILE%\\.claude)\n"
+        "  ①  Você nunca entrou no Claude Code neste PC → execute claude em um terminal e faça login.\n"
+        "  ②  Você troca de conta com /login na mesma pasta → só a última fica no arquivo.\n"
+        "  ③  Você usa claude setup-token + a variável CLAUDE_CODE_OAUTH_TOKEN → o token nunca é gravado em arquivo (não suportado).\n"
+        "  ④  Sua pasta de configuração está fora do padrão via CLAUDE_CONFIG_DIR → use «Adicionar pasta…».\n"
+        "  No macOS o token fica no Keychain, não em arquivo — este app é só para Windows."
+    ),
+    "help_codex_body": (
+        "Arquivo: <pasta de configuração>\\auth.json  (pasta padrão %USERPROFILE%\\.codex)\n"
+        "  ①  Você nunca executou codex login neste PC → execute codex login em um terminal com sua conta do ChatGPT.\n"
+        "  ②  Você usa chave de API (auth_mode = apikey, OPENAI_API_KEY) → não há janelas de 5 horas/semanal para mostrar (não suportado).\n"
+        "  ③  Sua pasta de configuração está fora do padrão via CODEX_HOME → use «Adicionar pasta…».\n"
+        "  Quando o token envelhece aparece «⚠ é preciso renovar o login» — execute codex uma vez e a CLI o renova."
+    ),
+    "help_multi_title": "Várias contas ao mesmo tempo",
+    "help_multi_body": (
+        "Dê a cada conta a sua própria pasta. No PowerShell:\n" + _MULTI_PS +
+        "Entre ali com a segunda conta; o arquivo aparece nessa pasta e «Procurar de novo» a encontra."
+    ),
+    "btn_statusline_install": "Instalar vínculo com a status line",
+    "btn_statusline_uninstall": "Remover vínculo com a status line",
+    "statusline_confirm_install": "Isto vai modificar o arquivo de configurações do Claude Code desta conta:\n{path}\n\nUm backup é feito antes:\n{backup}\n\nstatusLine passará a apontar para o script de exportação deste app; a statusLine original fica guardada na pasta deste app e é restaurada em «Remover».\nVale a partir das próximas sessões do Claude Code. Continuar?",
+    "statusline_confirm_uninstall": "Remover o vínculo com a status line do arquivo de configurações do Claude Code desta conta:\n{path}\n\nA statusLine original é restaurada (ou a chave é removida se não havia). Continuar?",
+    "statusline_done_install": "Instalado. Os dados chegam quando você abrir uma nova sessão do Claude Code.\nBackup: {backup}",
+    "statusline_done_uninstall": "Removido. As configurações originais voltaram.",
+    "statusline_failed": "Falha no vínculo com a status line: {e}",
+    "err_no_token": "É preciso entrar no Claude Code (sem arquivo de token)",
+    "err_token_read": "Não foi possível ler o arquivo de login: {x}",
+    "err_token_expired": "Token expirado — execute o Claude Code uma vez para renovar",
+    "err_401": "401 — token recusado. Execute o Claude Code para entrar / renovar",
+    "err_http": "HTTP {x}",
+    "err_official_missing": "Sem dados da status line — «Instalar vínculo com a status line» e abra uma sessão do Claude Code",
+    "err_official_nodata": "A status line ainda não tem uso — aparece após a primeira resposta no Claude Code",
+    "err_official_unsupported": "Sem dados oficiais (este serviço só existe no modo API não oficial)",
+    "err_codex_no_auth": "É preciso entrar no Codex (sem auth.json) — execute codex login no terminal",
+    "err_codex_apikey": "O Codex está em modo de chave de API — sem janelas de uso, não suportado",
+    "err_codex_401": "É preciso renovar o login do Codex — execute codex uma vez",
+    "err_codex_nodata": "A resposta do Codex não tem janelas de uso",
+},
+# ------------------------------------------------------------------ Español
+"es": {
+    "app_desc": "Muestra el uso de tus suscripciones de IA (límites de 5 horas / semanal) en el espacio libre de la barra de tareas — Claude Code · Codex.",
+    "menu_settings": "Ajustes…",
+    "menu_next": "Siguiente elemento ⇄",
+    "menu_refresh": "Actualizar ahora",
+    "menu_remeasure": "Volver a medir el espacio libre",
+    "menu_usage_page": "Abrir la página de uso de {name}",
+    "menu_readme": "Cómo se usa (README en GitHub)",
+    "menu_support": "☕ Apoyar al desarrollador",
+    "menu_quit": "Salir",
+    "bar_no_entries": "Sin cuentas — añade la carpeta de Claude Code / Codex en Ajustes",
+    "bar_pick_items": "Elige las ventanas (5h/7d) a mostrar en Ajustes",
+    "bar_loading": "Cargando…",
+    "tray_no_entries": "Sin cuentas — añade una en Ajustes",
+    "stale_ago": "(hace {m} min)",
+    "window_5h": "5 horas",
+    "window_7d": "7 días",
+    "alert_limit": "[{label}] límite de {window} al {pct}% — se reinicia {reset}",
+    "win_settings": "Ajustes",
+    "win_setup": "Configuración inicial",
+    "sec_entries": " Elementos (servicio × carpeta de cuenta) ",
+    "col_show": "Mostrar",
+    "col_provider": "Servicio",
+    "col_label": "Etiqueta",
+    "col_folder": "Carpeta de cuenta",
+    "col_windows": "Ventanas",
+    "col_statusline": "Enlace con la status line",
+    "col_order": "Orden",
+    "btn_add_folder": "Añadir carpeta…",
+    "btn_rescan": "Volver a buscar",
+    "btn_why_missing": "¿No aparece tu cuenta?",
+    "btn_recheck": "Volver a comprobar la conexión",
+    "btn_ok": "Aceptar",
+    "btn_cancel": "Cancelar",
+    "hint_autodiscover": "Búsqueda automática — Claude Code: CLAUDE_CONFIG_DIR + carpetas .claude* de tu carpeta personal con .credentials.json · Codex: CODEX_HOME + carpetas .codex* con auth.json",
+    "no_entries_row": "Sin elementos — «Volver a buscar» si ya iniciaste sesión, «Añadir carpeta…» para otra carpeta, «¿No aparece tu cuenta?» para saber por qué",
+    "pick_provider_title": "¿De qué servicio es esta carpeta?",
+    "pick_provider_body": "Elige el servicio de la carpeta de cuenta que vas a añadir.",
+    "dialog_pick_folder": "Selecciona la carpeta de cuenta de {name} (la que contiene {file})",
+    "dup_folder": "Esa carpeta ya está en la lista.",
+    "no_cred_confirm": "No hay {file} en esta carpeta.\nAparece cuando inicias sesión en {name} usando esta carpeta.\n\n¿Añadirla de todos modos?",
+    "rescan_found": "Búsqueda: {n} cuenta(s) nueva(s)",
+    "rescan_none": "Búsqueda: ninguna cuenta nueva",
+    "sec_data_source": " Origen de los datos ",
+    "ds_api": "API no oficial — en tiempo real; consulta cada servicio cada 5 minutos (Claude: api.anthropic.com · Codex: chatgpt.com)",
+    "ds_official": "Modo oficial — usa solo los datos de la status line de Claude Code. Cero acceso a la red. Se actualiza solo mientras hay una sesión de Claude Code abierta (requiere «Instalar enlace con la status line» por cuenta). Codex no tiene datos oficiales y no se muestra",
+    "ds_hide_unsupported": "En modo oficial, ocultar los elementos sin datos oficiales (Codex)",
+    "sec_display": " Visualización ",
+    "mode_all": "Todos los elementos a la vez",
+    "mode_click": "Cambiar al hacer clic (un elemento; clic en la barra o en ⇄)",
+    "mode_slide": "Diapositivas automáticas (un elemento; avanza cada intervalo; el clic también funciona)",
+    "mode_fixed": "Fijar un elemento",
+    "slide_hint_pre": "Intervalo",
+    "slide_hint": "segundos (solo en modo diapositivas)",
+    "fixed_hint": "Elemento fijado",
+    "sec_style": " Estilo ",
+    "style_badge": "Mostrar la insignia del servicio (Claude / Codex)",
+    "style_label": "Mostrar la etiqueta de la cuenta (cuando hay 2+ elementos)",
+    "style_bars": "Barras:",
+    "style_bars_auto": "Automático (según el espacio)",
+    "style_bars_bars": "Barras + números",
+    "style_bars_numbers": "Solo números",
+    "style_badge_color": "Color de la insignia",
+    "style_label_color": "Color de la etiqueta",
+    "style_pick": "Elegir…",
+    "style_reset": "Predeterminado",
+    "item_scoped": "Mostrar límites por modelo (p. ej. Fable de Claude — solo con la API no oficial)",
+    "sec_startup": " Inicio ",
+    "autostart": "Iniciar automáticamente al entrar en Windows",
+    "run_location": "Ejecutándose desde: {dir}\nPara quitarlo: desactiva el inicio automático y borra esta carpeta (no toca el registro ni carpetas del sistema).",
+    "sec_language": " Idioma / Language ",
+    "lang_auto": "Predeterminado del sistema",
+    "link_readme": "Cómo se usa · cómo funciona (qué API se llama y cómo) · informar de un problema — abrir el README en GitHub",
+    "unofficial_note": "※ El modo API no oficial usa endpoints que los servicios no documentan. Tu token solo se envía a ese servicio.\n※ Esta app es un proyecto de código abierto independiente, sin relación con Anthropic ni OpenAI.",
+    "btn_start": "Iniciar",
+    "btn_save": "Guardar",
+    "btn_close": "Cerrar",
+    "status_connected": "●  {label} ({name}): conectada — {plan}, el token caduca {exp}",
+    "status_disconnected": "○  {label} ({name}): no conectada — {reason}",
+    "status_error": "  ⚠ {err}",
+    "status_last_ok": "  (obtenido {time} OK)",
+    "status_statusline_on": "  [status line enlazada]",
+    "autostart_failed": "No se pudo configurar el inicio automático: {e}",
+    "help_title": "Mi cuenta no está en la lista",
+    "help_intro": (
+        "Lo que esta app considera una \"cuenta\" es el archivo de inicio de sesión dentro de la carpeta donde lo guarda la CLI de cada servicio.\n"
+        "Ese archivo solo se crea al iniciar sesión con la CLI (la app de terminal). Usar solo la web o la app de escritorio no lo crea."
+    ),
+    "help_claude_body": (
+        "Archivo: <carpeta de configuración>\\.credentials.json  (carpeta predeterminada %USERPROFILE%\\.claude)\n"
+        "  ①  Nunca has iniciado sesión en Claude Code en este PC → ejecuta claude en un terminal e inicia sesión.\n"
+        "  ②  Cambias de cuenta con /login en la misma carpeta → solo la última queda en el archivo.\n"
+        "  ③  Usas claude setup-token + la variable CLAUDE_CODE_OAUTH_TOKEN → el token nunca se guarda en un archivo (no compatible).\n"
+        "  ④  Tu carpeta de configuración está fuera de la predeterminada vía CLAUDE_CONFIG_DIR → usa «Añadir carpeta…».\n"
+        "  En macOS el token vive en el Llavero, no en un archivo — esta app es solo para Windows."
+    ),
+    "help_codex_body": (
+        "Archivo: <carpeta de configuración>\\auth.json  (carpeta predeterminada %USERPROFILE%\\.codex)\n"
+        "  ①  Nunca has ejecutado codex login en este PC → ejecuta codex login en un terminal con tu cuenta de ChatGPT.\n"
+        "  ②  Usas una clave de API (auth_mode = apikey, OPENAI_API_KEY) → no hay ventanas de 5 horas/semanal que mostrar (no compatible).\n"
+        "  ③  Tu carpeta de configuración está fuera de la predeterminada vía CODEX_HOME → usa «Añadir carpeta…».\n"
+        "  Cuando el token envejece aparece «⚠ hay que renovar el inicio de sesión» — ejecuta codex una vez y la CLI lo renueva."
+    ),
+    "help_multi_title": "Varias cuentas a la vez",
+    "help_multi_body": (
+        "Dale a cada cuenta su propia carpeta. En PowerShell:\n" + _MULTI_PS +
+        "Inicia sesión ahí con la segunda cuenta; el archivo aparece en esa carpeta y «Volver a buscar» la detecta."
+    ),
+    "btn_statusline_install": "Instalar enlace con la status line",
+    "btn_statusline_uninstall": "Quitar enlace con la status line",
+    "statusline_confirm_install": "Se modificará el archivo de ajustes de Claude Code de esta cuenta:\n{path}\n\nAntes se hace una copia de seguridad:\n{backup}\n\nstatusLine apuntará al script de exportación de esta app; la statusLine original se guarda en la carpeta de esta app y se restaura al «Quitar».\nSe aplica en las nuevas sesiones de Claude Code. ¿Continuar?",
+    "statusline_confirm_uninstall": "Quitar el enlace con la status line del archivo de ajustes de Claude Code de esta cuenta:\n{path}\n\nSe restaura la statusLine original (o se elimina la clave si no había). ¿Continuar?",
+    "statusline_done_install": "Instalado. Los datos llegan al abrir una nueva sesión de Claude Code.\nCopia de seguridad: {backup}",
+    "statusline_done_uninstall": "Quitado. Los ajustes originales han vuelto.",
+    "statusline_failed": "Falló el enlace con la status line: {e}",
+    "err_no_token": "Hace falta iniciar sesión en Claude Code (no hay archivo de token)",
+    "err_token_read": "No se puede leer el archivo de inicio de sesión: {x}",
+    "err_token_expired": "Token caducado — ejecuta Claude Code una vez para renovarlo",
+    "err_401": "401 — token rechazado. Ejecuta Claude Code para iniciar sesión / renovar",
+    "err_http": "HTTP {x}",
+    "err_official_missing": "Sin datos de la status line — «Instalar enlace con la status line» y abre una sesión de Claude Code",
+    "err_official_nodata": "La status line aún no tiene uso — aparece tras la primera respuesta en Claude Code",
+    "err_official_unsupported": "Sin datos oficiales (este servicio solo está en modo API no oficial)",
+    "err_codex_no_auth": "Hace falta iniciar sesión en Codex (no hay auth.json) — ejecuta codex login en un terminal",
+    "err_codex_apikey": "Codex está en modo de clave de API — sin ventanas de uso, no compatible",
+    "err_codex_401": "Hay que renovar el inicio de sesión de Codex — ejecuta codex una vez",
+    "err_codex_nodata": "La respuesta de Codex no tiene ventanas de uso",
+},
+}
