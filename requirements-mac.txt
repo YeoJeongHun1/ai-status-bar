@@ -1,0 +1,4 @@
+# macOS 메뉴 막대 판 (ai_status_bar_mac.py). Python 3.11+ (Homebrew python3 권장 — /usr/bin/python3 은 3.9)
+pillow>=10
+rumps>=0.4
+pyobjc-framework-Cocoa>=10
