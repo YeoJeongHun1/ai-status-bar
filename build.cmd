@@ -6,7 +6,7 @@ rem Why one-folder, not one-file: the one-file bootloader unpacks itself to %TEM
 rem which is exactly what antivirus ML heuristics flag (Trojan:Win32/Sabsik.*!ml, Wacatac.*!ml ...).
 rem A plain folder with a normal exe + DLLs is far less likely to be flagged.
 cd /d "%~dp0"
-for /f "tokens=3 delims= " %%v in ('findstr /b "__version__" ai_status_bar.py') do set VER=%%~v
+for /f "tokens=3 delims= " %%v in ('findstr /b "__version__" version.py') do set VER=%%~v
 set VER=%VER:"=%
 if exist dist\AIStatusBar rmdir /s /q dist\AIStatusBar
 pyinstaller --noconfirm --onedir --windowed --name AIStatusBar ^
@@ -24,6 +24,9 @@ copy /y README.md dist\AIStatusBar\README.md >nul
 copy /y LICENSE dist\AIStatusBar\LICENSE >nul
 if exist "dist\AIStatusBar-%VER%-win64.zip" del "dist\AIStatusBar-%VER%-win64.zip"
 python -c "import shutil; shutil.make_archive('dist/AIStatusBar-%VER%-win64', 'zip', 'dist', 'AIStatusBar')"
+rem SHA-256 next to the zip so downloads can be verified (attach both files to the release)
+python -c "import hashlib,sys; p='dist/AIStatusBar-%VER%-win64.zip'; h=hashlib.sha256(open(p,'rb').read()).hexdigest(); open(p+'.sha256','w').write(h+'  '+p.split('/')[-1]+'
+'); print('sha256', h)"
 echo.
-echo OK -> dist\AIStatusBar\AIStatusBar.exe  and  dist\AIStatusBar-%VER%-win64.zip
+echo OK -> dist\AIStatusBar\AIStatusBar.exe  and  dist\AIStatusBar-%VER%-win64.zip (+ .sha256)
 pause
