@@ -64,6 +64,8 @@ OLD_STARTUP_LNK = os.path.join(STARTUP_DIR, "Claude Status Bar.lnk")
 APP_DIR = os.path.dirname(os.path.abspath(sys.executable if FROZEN else __file__))   # 풀어 둔 그 자리
 MODES = ("all", "click", "slide", "fixed")
 BAR_STYLES = ("auto", "bars", "numbers")
+PLACEMENTS = ("left", "auto")                 # left = 위젯/시작 버튼 뒤 첫 빈 공간에 고정 / auto = 들어가는 가장 왼쪽 빈 공간
+OVERFLOW_POLICIES = ("slide", "numbers", "collapse")   # «모두 동시에» 가 안 들어갈 때
 DEFAULT_SETTINGS = {
     "entries": [],               # [{"provider", "path", "label", "enabled", "windows": {"5h": True, "7d": True}}]
     "display_mode": "all",       # all = 모두 동시에 / click = 클릭으로 전환 / slide = 자동 슬라이드 / fixed = 하나 고정
@@ -71,6 +73,8 @@ DEFAULT_SETTINGS = {
     "fixed_entry": "",           # "provider|path"
     "show_scoped": True,         # 모델별 한도 (Claude: Fable 등)
     "style": {"label": False, "bars": "auto", "label_color": ""},
+    "placement": "left",
+    "overflow_policy": "slide",
     "language": "auto",
     "data_source": "api",        # api = 비공식 API / official = 상태줄 데이터만 (네트워크 0)
     "official_hide_unsupported": True,
@@ -115,6 +119,10 @@ def load_settings():
         s["style"]["bars"] = st["bars"]
     v = st.get("label_color") or ""
     s["style"]["label_color"] = v if isinstance(v, str) and v.startswith("#") and len(v) == 7 else ""
+    if raw.get("placement") in PLACEMENTS:
+        s["placement"] = raw["placement"]
+    if raw.get("overflow_policy") in OVERFLOW_POLICIES:
+        s["overflow_policy"] = raw["overflow_policy"]
     if raw.get("language") in ("auto",) + SUPPORTED:
         s["language"] = raw["language"]
     if raw.get("data_source") in ("api", "official"):
@@ -196,6 +204,8 @@ class StatusBar:
         self.settings_win = None
         self.help_win = None
         self._ov = None                               # 미리보기용 오버라이드 {"settings","entries","data"}
+        self.auto_adjusted = None                     # 빈 공간 부족으로 임시 전환된 정책 ("slide"|"numbers"|"collapse") — 설정 파일은 안 바뀐다
+        self.clip_w = None                            # numbers 정책으로 잘라 그릴 때의 폭
         self.mode = "full"
         self.signature = None
         self.gap = (0, 0)
@@ -251,6 +261,13 @@ class StatusBar:
         """그리기에 쓰는 설정 — 미리보기 중이면 폼의 임시 설정."""
         return self._ov["settings"] if self._ov else self.settings
 
+    def display_mode(self):
+        """실제로 적용되는 표시 모드 — 빈 공간 부족으로 임시 슬라이드 중이면 slide."""
+        S = self.cfg()
+        if not self._ov and self.auto_adjusted == "slide" and S["display_mode"] == "all":
+            return "slide"
+        return S["display_mode"]
+
     def official(self):
         return self.cfg()["data_source"] == "official"
 
@@ -293,7 +310,7 @@ class StatusBar:
         if not ents:
             return []
         S = self.cfg()
-        mode = S["display_mode"]
+        mode = self.display_mode()
         if mode == "fixed":
             for e in ents:
                 if entry_key(e) == S["fixed_entry"]:
@@ -307,7 +324,7 @@ class StatusBar:
         return ents
 
     def switchable(self):
-        return self.cfg()["display_mode"] in ("click", "slide") and len(self.enabled_entries()) > 1
+        return self.display_mode() in ("click", "slide") and len(self.enabled_entries()) > 1
 
     def next_entry(self):
         if self.switchable():
@@ -321,7 +338,7 @@ class StatusBar:
             self.cycle_job = None
         if self.hovering:                              # 바 위에 마우스가 있으면 정지 — Leave 때 주기 전체를 새로 시작
             return
-        if self.settings["display_mode"] == "slide" and len(self.enabled_entries()) > 1:
+        if self.display_mode() == "slide" and len(self.enabled_entries()) > 1:
             self.cycle_job = self.root.after(self.settings["slide_sec"] * 1000, self.next_entry)
 
     # --- 다른 스레드에서 온 일감을 메인 루프에서 처리 ---
@@ -379,7 +396,8 @@ class StatusBar:
             first = self.visible_entries()[:1]
             d = self.data.get(entry_key(first[0])) if first else None
             self.tray.icon = draw_icon(d and d.get("usage"), error=bool(d and d.get("error")))
-            self.tray.title = f"{APP_TITLE} — {self.tray_status()}"[:127]
+            prefix = t("tray_auto_prefix") if self.auto_adjusted else ""
+            self.tray.title = f"{prefix}{APP_TITLE} — {self.tray_status()}"[:127]
             self.tray.update_menu()
         except Exception:
             pass
@@ -431,19 +449,77 @@ class StatusBar:
             self.canvas.configure(bg=self.key)
             self.root.configure(bg=self.key)
             self.root.attributes("-transparentcolor", self.key)
-        need = self.px(24)
-        self.gap = self.gaps[0] if self.gaps else (m, m + need)
-        for mode in self.tiers():
-            self.mode = mode
-            need = self.draw()
-            fits = [g for g in self.gaps if g[1] - g[0] >= need]
-            if fits:
-                self.gap = fits[0]
-                break
+        need = self.place_and_draw()
         self.canvas.configure(width=need)
         _, top, _, _ = tb.win_rect(tb.taskbar())
         tb.place(self.hwnd, self.gap[0], top, need, self.h)
         self.root.deiconify()
+
+    def candidate_gaps(self):
+        """placement=left 면 첫 빈 공간 하나(다른 빈 공간으로 건너뛰지 않는다), auto 면 전부."""
+        if not self.gaps:
+            return []
+        return self.gaps[:1] if self.settings["placement"] == "left" else list(self.gaps)
+
+    def try_fit(self, modes):
+        """모드들을 순서대로 그려 보고 들어가는 첫 (mode, gap, need) — 없으면 None."""
+        for mode in modes:
+            self.mode = mode
+            need = self.draw()
+            for g in self.candidate_gaps():
+                if g[1] - g[0] >= need:
+                    return mode, g, need
+        return None
+
+    def place_and_draw(self):
+        """설정대로 들어가면 그대로. 안 들어가면 overflow_policy 대로 임시 조절하고(설정 파일은 그대로) 알림 1회.
+        다시 들어가면 조용히 원래대로. 필요한 폭을 돌려준다."""
+        m = int(MARGIN * self.scale)
+        self.clip_w = None
+        self.gap = self.gaps[0] if self.gaps else (m, m + self.px(24))
+        before = self.auto_adjusted
+        self.auto_adjusted = None                                   # 먼저 원래 설정으로 시도
+        shrink = [x for x in self.tiers() if x != "collapsed"]
+        fit = self.try_fit(shrink)
+        if fit is None and self.gaps:
+            policy = self.settings["overflow_policy"]
+            multi = self.settings["display_mode"] == "all" and len(self.enabled_entries()) > 1
+            if policy == "slide" and multi:
+                self.auto_adjusted = "slide"                         # 한 항목씩 (visible_entries 가 display_mode() 를 따른다)
+                fit = self.try_fit(shrink)
+            if fit is None and policy in ("slide", "numbers"):
+                g = self.candidate_gaps()[0]
+                self.auto_adjusted = self.auto_adjusted or "numbers"
+                if policy == "numbers" or self.auto_adjusted == "numbers":
+                    self.auto_adjusted = "numbers"
+                self.mode = "compact"
+                self.clip_w = g[1] - g[0]
+                self.draw()
+                self.draw_ellipsis(self.clip_w)
+                fit = ("compact", g, self.clip_w)
+            if fit is None:
+                self.auto_adjusted = "collapse"
+                self.mode = "collapsed"
+                fit = ("collapsed", self.candidate_gaps()[0], self.draw())
+        if fit is None:                                              # 빈 공간을 아직 못 잰 상태
+            self.mode = "collapsed"
+            fit = ("collapsed", self.gap, self.draw())
+        self.mode, self.gap, need = fit
+        if self.auto_adjusted != before:
+            self.schedule_cycle()
+            self.update_tray()
+            if self.auto_adjusted and (before is None or before != self.auto_adjusted):
+                self.notify(t(f"notify_overflow_{self.auto_adjusted}"))
+            if self.settings_win:
+                self.preview_dirty()
+        return need
+
+    def draw_ellipsis(self, clip_w):
+        """numbers 정책: 오른쪽 넘치는 부분을 투명 키 색 사각형으로 가리고 … 을 찍는다."""
+        c = self.canvas
+        w = self.px(18)
+        c.create_rectangle(clip_w - w, 0, clip_w, self.h, fill=self.key, outline="", tags=("ellipsis",))
+        c.create_text(clip_w - w // 2, self.h // 2, text="…", fill=self.dim, font=self.font(10, True), tags=("ellipsis",))
 
     def watch(self):
         """2초마다: 잠금·전체화면·작업 표시줄 변화를 보고 필요한 만큼만 손댄다."""
@@ -831,9 +907,9 @@ class StatusBar:
         sw = self.root.winfo_screenwidth()
         x = max(0, min(int(x_root - tw / 2), sw - tw))
         anchor_y = y_root if y_root is not None else top
-        y = anchor_y - th - self.px(12)
+        y = min(anchor_y - th - self.px(12), top - th - self.px(8))   # 작업 표시줄 위로 — 겹치면 빈 공간 측정에 잡힌다
         if y < 0:
-            y = anchor_y + self.px(16)
+            y = max(anchor_y, bottom) + self.px(8)
         self.tooltip.geometry(f"+{x}+{y}")
 
     def hide_tooltip(self):
@@ -904,6 +980,7 @@ class StatusBar:
             "entries": entries, "display_mode": self.v_mode.get(), "slide_sec": slide_sec, "fixed_entry": fixed,
             "show_scoped": self.v_scoped.get(),
             "style": {"label": self.v_label.get(), "bars": self.v_bars.get(), "label_color": self.v_label_color.get()},
+            "placement": self.v_placement.get(), "overflow_policy": self.v_overflow.get(),
             "language": language, "data_source": self.v_ds.get(),
             "official_hide_unsupported": self.v_hide.get(),
             "seen_providers": [p.id for p in PROVIDERS],
@@ -985,7 +1062,10 @@ class StatusBar:
             need = self.render_preview(c, S, h, mode=tier)
         c.configure(width=min(max(need + self.px(8), self.px(120)), self.px(700)))
         if gap_w:
-            self.preview_hint.configure(text=t("preview_hint", n=gap_w, tier=t(f"tier_{tier}")))
+            txt = t("preview_hint", n=gap_w, tier=t(f"tier_{tier}"))
+            if self.auto_adjusted:
+                txt += t("preview_auto_adjusted", policy=t(f"policy_{self.auto_adjusted}"))
+            self.preview_hint.configure(text=txt)
         else:
             self.preview_hint.configure(text=t("preview_hint_nogap"))
         self.highlight_presets(S)
@@ -1023,8 +1103,8 @@ class StatusBar:
     # --- 창 ---
     def section(self, parent, key, row, hint=None):
         """굵은 제목 + 얇은 구분선 (+ 회색 설명 한 줄)."""
-        ttk.Label(parent, text=t(key), font=("Segoe UI", 10, "bold")).grid(row=row, column=0, columnspan=4, sticky="w", pady=(6, 0))
-        ttk.Separator(parent, orient="horizontal").grid(row=row + 1, column=0, columnspan=4, sticky="ew", pady=(2, 3))
+        ttk.Label(parent, text=t(key), font=("Segoe UI", 10, "bold")).grid(row=row, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        ttk.Separator(parent, orient="horizontal").grid(row=row + 1, column=0, columnspan=4, sticky="ew", pady=(1, 2))
         if hint:
             ttk.Label(parent, text=t(hint), foreground="#808080", font=("Segoe UI", 8), wraplength=self.px(690), justify="left").grid(
                 row=row + 2, column=0, columnspan=4, sticky="w", pady=(0, 6))
@@ -1212,6 +1292,8 @@ class StatusBar:
         self.v_scoped = self.watch_var(tk.BooleanVar(value=self.settings["show_scoped"]))
         self.v_bars = self.watch_var(tk.StringVar(value=st["bars"]))
         self.v_label_color = self.watch_var(tk.StringVar(value=st["label_color"]))
+        self.v_placement = self.watch_var(tk.StringVar(value=self.settings["placement"]))
+        self.v_overflow = self.watch_var(tk.StringVar(value=self.settings["overflow_policy"]))
         names = [n for _, n in self.fixed_choices()]
         cur = next((n for k, n in self.fixed_choices() if k == self.settings["fixed_entry"]), names[0] if names else "")
         self.v_fixed = self.watch_var(tk.StringVar(value=cur))
@@ -1222,10 +1304,10 @@ class StatusBar:
         grid.grid(row=row, column=0, columnspan=4, sticky="ew")
         self.preset_cards = []
         for i, (key, values) in enumerate(self.PRESETS):
-            card = tk.Frame(grid, bg="#ffffff", highlightthickness=1, highlightbackground="#d0d0d0", cursor="hand2", padx=8, pady=6)
+            card = tk.Frame(grid, bg="#ffffff", highlightthickness=1, highlightbackground="#d0d0d0", cursor="hand2", padx=8, pady=4)
             card.grid(row=i // 3, column=i % 3, padx=(0, 8) if i % 3 < 2 else 0, pady=(0, 8), sticky="nsew")
             grid.columnconfigure(i % 3, weight=1)
-            cv = tk.Canvas(card, width=self.px(214), height=self.px(28), bg="#202020", highlightthickness=0, bd=0)
+            cv = tk.Canvas(card, width=self.px(214), height=self.px(24), bg="#202020", highlightthickness=0, bd=0)
             cv.pack(anchor="w")
             self.draw_preset_card(cv, values)
             row_ = tk.Frame(card, bg="#ffffff")
@@ -1251,9 +1333,19 @@ class StatusBar:
         ttk.Label(sub, text=t("fixed_hint")).pack(side="left")
         self.fixed_combo = ttk.Combobox(sub, textvariable=self.v_fixed, values=names, state="readonly", width=24)
         self.fixed_combo.pack(side="left", padx=(6, 0))
+        prow = ttk.Frame(f)
+        prow.grid(row=row + 2, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        ttk.Label(prow, text=t("placement_label")).pack(side="left")
+        for val in PLACEMENTS:
+            ttk.Radiobutton(prow, text=t(f"placement_{val}"), variable=self.v_placement, value=val).pack(side="left", padx=(10, 0))
+        orow = ttk.Frame(f)
+        orow.grid(row=row + 3, column=0, columnspan=4, sticky="w", pady=(2, 0))
+        ttk.Label(orow, text=t("overflow_label")).pack(side="left")
+        for val in OVERFLOW_POLICIES:
+            ttk.Radiobutton(orow, text=t(f"policy_{val}"), variable=self.v_overflow, value=val).pack(side="left", padx=(10, 0))
 
         # 모양
-        row = self.section(f, "sec_look", row + 2)
+        row = self.section(f, "sec_look", row + 4)
         lf = ttk.Frame(f)
         lf.grid(row=row, column=0, columnspan=4, sticky="ew")
         ttk.Checkbutton(lf, text=t("style_label"), variable=self.v_label).grid(row=0, column=0, sticky="w")
