@@ -16,11 +16,11 @@ Codex 제공자 — ChatGPT 구독(Plus/Pro/Team)으로 쓰는 OpenAI Codex CLI 
 import base64
 import json
 import os
-import urllib.error
-import urllib.request
 from datetime import datetime
 
 from . import Provider
+from . import http
+from version import USER_AGENT
 
 USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 DEFAULT_CODEX_HOME = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
@@ -102,18 +102,16 @@ class Codex(Provider):
             raise RuntimeError("err_codex_apikey")
         headers = {
             "Authorization": f"Bearer {tok['access_token']}",
-            "User-Agent": "ai-status-bar/1.0",
+            "User-Agent": USER_AGENT,
         }
         if tok.get("account_id"):
             headers["ChatGPT-Account-Id"] = tok["account_id"]
-        req = urllib.request.Request(USAGE_URL, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=15) as r:
-                return parse(json.loads(r.read().decode("utf-8")))
-        except urllib.error.HTTPError as e:
-            if e.code in (401, 403):
+            return parse(http.get_json(USAGE_URL, headers))  # 리다이렉트 금지·호스트 허용 목록은 http.get_json 이 지킨다
+        except RuntimeError as e:
+            if str(e) in ("err_401", "err_403"):
                 raise RuntimeError("err_codex_401") from None
-            raise RuntimeError(f"err_http {e.code}") from None
+            raise
 
 
 def _load(path):

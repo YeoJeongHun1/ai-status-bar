@@ -9,6 +9,8 @@ Claude Code 제공자 — Claude 구독(Pro/Max)의 5시간 / 7일 사용률.
     Claude Code ──(상태줄 JSON, stdin)──▶ statusline_export.ps1 ──▶ %LOCALAPPDATA%\\AIStatusBar\\official\\<key>.json
                                                     └──(원래 상태줄 명령이 있으면 그대로 파이프)──▶ 화면
   key = 설정 폴더 경로 normcase(소문자·끝 구분자 제거) 의 UTF-8 SHA-1 앞 12자 — ps1 과 같은 규칙.
+  export 파일에는 rate_limits·모델명·saved_at 만 남긴다 (cwd·transcript_path·session_id 등 상태줄 JSON 의 나머지는 버린다).
+  «상태줄 연결 해제» 는 원래 statusLine 을 복원하고 보관본·export 파일을 지운다.
   «상태줄 연결 설치» 는 그 폴더의 settings.json 을 백업(settings.json.bak-aistatusbar)한 뒤 statusLine 을 export 스크립트로
   바꾸고, 원래 statusLine 은 이 앱 폴더(official/<key>.original.json)에 보관한다 — Claude Code 의 settings.json 에
   낯선 키를 넣지 않기 위해서다(스키마가 거부하는 값이 있으면 Claude Code 가 «Settings Error» 를 띄운다).
@@ -17,11 +19,11 @@ import hashlib
 import json
 import os
 import shutil
-import urllib.error
-import urllib.request
 from datetime import datetime
 
 from . import Provider
+from . import http
+from version import USER_AGENT
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 DEFAULT_CONFIG_DIR = os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude"))
@@ -113,16 +115,9 @@ class ClaudeCode(Provider):
             "Authorization": f"Bearer {token}",
             "anthropic-beta": "oauth-2025-04-20",
             "Content-Type": "application/json",
-            "User-Agent": "ai-status-bar/1.0",
+            "User-Agent": USER_AGENT,
         }
-        req = urllib.request.Request(USAGE_URL, headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=15) as r:
-                return parse(json.loads(r.read().decode("utf-8")))
-        except urllib.error.HTTPError as e:
-            if e.code == 401:
-                raise RuntimeError("err_401") from None
-            raise RuntimeError(f"err_http {e.code}") from None
+        return parse(http.get_json(USAGE_URL, headers))     # 리다이렉트 금지·호스트 허용 목록은 http.get_json 이 지킨다
 
     # --- 공식 모드 ---
     def fetch_official(self, path):
@@ -148,6 +143,9 @@ def parse(data):
 def to_local(iso):
     if not iso:
         return None
+    iso = str(iso)
+    if iso.endswith("Z"):                     # Python 3.10 이하의 fromisoformat 은 'Z' 를 못 읽는다
+        iso = iso[:-1] + "+00:00"
     return datetime.fromisoformat(iso).astimezone()
 
 
@@ -174,7 +172,8 @@ def read_official(config_dir):
     with open(path, encoding="utf-8") as f:
         wrapper = json.load(f)
     saved_at = datetime.fromtimestamp(float(wrapper.get("saved_at") or 0))
-    rl = (wrapper.get("statusline") or {}).get("rate_limits") or {}
+    # v1.2 부터 export 파일은 {"saved_at", "model", "rate_limits"} 만. (v1.1 의 "statusline" 전체 저장 파일도 읽는다)
+    rl = wrapper.get("rate_limits") or (wrapper.get("statusline") or {}).get("rate_limits") or {}
     if not rl:
         raise RuntimeError("err_official_nodata")
 
@@ -242,7 +241,7 @@ def statusline_install(config_dir, ps1_path):
 
 
 def statusline_uninstall(config_dir):
-    """원래 statusLine 복원(없었으면 키 제거) + 보관본 삭제."""
+    """원래 statusLine 복원(없었으면 키 제거) + 보관본·export 파일 삭제."""
     sp = settings_path(config_dir)
     data = _load(sp)
     original = None
@@ -255,5 +254,19 @@ def statusline_uninstall(config_dir):
     else:
         data.pop("statusLine", None)
     _save(sp, data)
-    if os.path.isfile(op):
-        os.remove(op)
+    for leftover in (op, official_path(config_dir)):        # 보관본 + export 파일(사용량 값)도 지운다
+        if os.path.isfile(leftover):
+            os.remove(leftover)
+
+
+def unlink_all(config_dirs):
+    """--unlink-statusline: 연결된 계정 폴더 전부 해제. 해제한 폴더 목록을 돌려준다."""
+    done = []
+    for d in config_dirs:
+        try:
+            if statusline_installed(d):
+                statusline_uninstall(d)
+                done.append(d)
+        except Exception:
+            pass
+    return done
