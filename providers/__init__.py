@@ -18,7 +18,7 @@ from PIL import Image, ImageDraw
 class Provider:
     id = ""                 # 설정 파일에 저장되는 식별자
     name = ""               # 표시 이름 (예: "Claude Code")
-    short = ""              # 바의 배지 (예: "Claude")
+    short = ""              # 짧은 이름 (툴팁·알림용, 예: "Claude")
     cred_file = ""          # 계정 폴더 안의 로그인 파일 이름
     usage_page = ""         # «사용량 페이지 열기» 링크
     supports_official = False
