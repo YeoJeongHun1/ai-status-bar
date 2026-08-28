@@ -229,12 +229,16 @@ class StatusBar:
         self.canvas.bind("<Motion>", self.on_motion)
         self.canvas.bind("<Enter>", self.on_enter)
         self.canvas.bind("<Leave>", self.on_leave)
+        self.root.bind("<FocusIn>", lambda ev: (tb.ensure_exstyle(self.hwnd), tb.raise_topmost(self.hwnd)))
         self.hovering = False                          # 마우스가 바 위에 있는 동안 자동 슬라이드를 멈춘다
         self.tooltip = None
         self.tooltip_job = None
         self.tooltip_entry = None
         self.entry_spans = []                          # [(x0, x1, entry)] — 툴팁 히트 테스트용
         self.dots = []                                 # [(x0, x1, index)] — 페이지 점 히트 테스트용
+        self.hover_target = None                       # 지금 하이라이트된 히트 다각형 태그
+        self.leave_job = None                          # Leave 120ms 유예 (글자 사이 투명 픽셀에서의 연타 흡수)
+        self.last_pointer = None                       # (x, x_root, y_root) — 전환 뒤 같은 자리에서 다시 호버
         self.dots_span = None                          # 점 영역 전체 (x0, x1)
         self.mini_tip = None                           # 점 위 한 줄 툴팁
         self._tags = ()
@@ -336,8 +340,37 @@ class StatusBar:
     def next_entry(self):
         if self.switchable():
             self.cur = (self.cur + 1) % len(self.enabled_entries())
-            self.relayout()
+            self.redraw()
         self.schedule_cycle()
+
+    def redraw(self):
+        """전환·호버용 가벼운 경로: 재측정·SetWindowPos(SHOWWINDOW)·deiconify 없이 캔버스만 다시 그리고,
+        폭이 바뀌면 크기만 조정한다. 툴팁은 닫고 같은 자리에서 새 항목으로 0.4초 뒤 다시 뜬다."""
+        if self.hidden_fullscreen or tb.session_locked():
+            return
+        need = self.place_and_draw()
+        self.canvas.configure(width=need)
+        l, _, r, _ = tb.win_rect(self.hwnd)
+        if r - l != need:
+            tb.resize(self.hwnd, need, self.h)
+        tb.ensure_exstyle(self.hwnd)
+        self.hide_tooltip()
+        self.hide_mini_tip()
+        self.tooltip_entry = None
+        self.rehover()
+
+    def rehover(self):
+        """재측정·전환으로 캔버스를 다시 그린 뒤, 커서 밑 항목의 하이라이트만 복구한다 (툴팁 타이머는 그대로).
+        레이아웃이 바뀌었을 수 있으니 «지금 실제 커서» 위치를 기준으로 다시 찾는다."""
+        if not self.hovering or self.mode == "collapsed" or not tb.cursor_over(self.hwnd):
+            return
+        pt = tb.cursor_point()
+        l, _, _, _ = tb.win_rect(self.hwnd)
+        x = pt[0] - l
+        if self.dot_at(x) is not None:
+            self.set_hover(None, dots=True)
+        else:
+            self.set_hover(self.entry_at(x))
 
     def schedule_cycle(self):
         if self.cycle_job:
@@ -413,6 +446,8 @@ class StatusBar:
     def set_palette(self, bg):
         self.bg = bg
         self.key = "#%02x%02x%02x" % bg
+        hb = bg[2] + 1 if bg[2] < 255 else bg[2] - 1
+        self.hit = "#%02x%02x%02x" % (bg[0], bg[1], hb)      # 키 색과 1만 다른 «near-key»: 눈엔 투명, 마우스엔 단단
         dark = sum(bg) / 3 < 128
         self.fg = "#f0f0f0" if dark else "#101010"
         self.dim = "#a0a0a0" if dark else "#606060"
@@ -461,6 +496,9 @@ class StatusBar:
         _, top, _, _ = tb.win_rect(tb.taskbar())
         tb.place(self.hwnd, self.gap[0], top, need, self.h)
         self.root.deiconify()
+        if tb.ensure_exstyle(self.hwnd):               # deiconify/-transparentcolor 가 ex-style 을 되돌렸으면 다시
+            tb.raise_topmost(self.hwnd)
+        self.rehover()
 
     def candidate_gaps(self):
         """placement=left 면 첫 빈 공간 하나(다른 빈 공간으로 건너뛰지 않는다), auto 면 전부."""
@@ -562,7 +600,7 @@ class StatusBar:
             return False
 
     def periodic_measure(self):
-        if not self.hidden_fullscreen:
+        if not self.hidden_fullscreen and not self.hovering:   # 호버 중엔 미룬다 — Leave 뒤 다음 주기에 잰다
             self.relayout(force=True)
         self.root.after(REMEASURE_SEC * 1000, self.periodic_measure)
 
@@ -617,6 +655,8 @@ class StatusBar:
         mode = mode or self.mode
         h = height or self.h
         c.delete("all")
+        if c is self.canvas and self._ov is None:
+            self.hover_target = None
         if mode == "collapsed":
             c.create_text(self.px(12), h // 2, text="›", fill=self.fg, font=self.font(14, True))
             return self.px(24)
@@ -633,9 +673,12 @@ class StatusBar:
                 x += self.px(10)
             self._tags = (f"entry:{i}",)
             x0 = x
+            hit = c.create_polygon(0, 0, 0, 0, fill=self.hit, outline=self.hit, tags=("hit", f"hit:{i}"))
             if st["label"]:
                 x = self.text(c, x, h // 2, e["label"], st["label_color"] or self.fg, self.font(9, True), gap=7)
             x = self.draw_entry(c, x, h, e, mode)
+            c.coords(hit, *rounded_points(x0 - self.px(5), self.px(4), x + self.px(1), h - self.px(4), self.px(6)))
+            c.tag_lower(hit)
             spans.append((x0, x, e))
             x += self.px(6)
         self._tags = ()
@@ -657,17 +700,23 @@ class StatusBar:
             step, r = self.px(12), self.px(3)
             x0 = x + self.px(2)
             dots = []
+            hit = c.create_polygon(0, 0, 0, 0, fill=self.hit, outline=self.hit, tags=("hit", "hit:dots"))
             for i in range(len(ents)):
                 cx = x0 + r + i * step
                 col = self.fg if i == cur else self.dim
                 c.create_oval(cx - r, h // 2 - r, cx + r, h // 2 + r, fill=col, outline=col, tags=("dot", f"dot:{i}"))
                 dots.append((cx - step // 2, cx + step // 2, i))
             x1 = x0 + r + (len(ents) - 1) * step + r + self.px(2)
+            c.coords(hit, *rounded_points(x0 - self.px(3), self.px(4), x1 + self.px(3), h - self.px(4), self.px(6)))
+            c.tag_lower(hit)
             if live:
                 self.dots, self.dots_span = dots, (x0, x1)
             return x1 + self.px(6)
         if ind == "arrow":
+            hit = c.create_polygon(0, 0, 0, 0, fill=self.hit, outline=self.hit, tags=("hit", "hit:dots"))
             nx = self.text(c, x, h // 2, "⇄", self.dim, self.font(13, True), gap=6, tags=("switch",))
+            c.coords(hit, *rounded_points(x - self.px(3), self.px(4), nx - self.px(3), h - self.px(4), self.px(6)))
+            c.tag_lower(hit)
             if live:
                 self.dots_span = (x, nx - self.px(6))
             return nx
@@ -685,7 +734,7 @@ class StatusBar:
         ents = self.enabled_entries()
         if ents:
             self.cur = i % len(ents)
-            self.relayout()
+            self.redraw()
         self.schedule_cycle()
 
     def draw_entry(self, c, x, h, e, mode):
@@ -764,6 +813,16 @@ class StatusBar:
             self.popup = None
 
     def on_left(self, e):
+        tb.ensure_exstyle(self.hwnd)
+        tb.raise_topmost(self.hwnd)
+        self.last_pointer = (e.x, e.x_root, e.y_root)
+        try:
+            self._on_left(e)
+        finally:
+            tb.raise_topmost(self.hwnd)
+        return "break"
+
+    def _on_left(self, e):
         di = self.dot_at(e.x) if self.mode != "collapsed" else None
         if di is not None and di >= 0:
             self.go_to(di)
@@ -790,8 +849,12 @@ class StatusBar:
         return None
 
     def on_motion(self, ev):
+        if self.leave_job:
+            self.root.after_cancel(self.leave_job)
+            self.leave_job = None
         if not self.hovering:
             self.on_enter(ev)
+        self.last_pointer = (ev.x, ev.x_root, ev.y_root)
         di = self.dot_at(ev.x) if self.mode != "collapsed" else None
         if di is not None:
             if self.tooltip_entry is not None or not self.canvas.find_withtag("hover"):
@@ -818,12 +881,31 @@ class StatusBar:
             self.set_hover(e)                          # relayout 이 지운 뒤 다시
 
     def on_enter(self, ev=None):
+        if self.leave_job:                             # 유예 중이던 Leave 취소 (글자 사이 투명 픽셀 연타)
+            self.root.after_cancel(self.leave_job)
+            self.leave_job = None
         self.hovering = True
         if self.cycle_job:                             # 진행 중이던 슬라이드 타이머 취소
             self.root.after_cancel(self.cycle_job)
             self.cycle_job = None
 
     def on_leave(self, ev=None):
+        """Leave 는 120ms 뒤에 확정 — 그 안에 Enter/Motion 이 오면 없던 일.
+        창 리사이즈(재측정)가 만드는 «가짜 Leave» 는 커서가 아직 위에 있으므로 무시한다 → 깜빡임·툴팁 소실 방지."""
+        if tb.cursor_over(self.hwnd):
+            return
+        if self.leave_job:
+            self.root.after_cancel(self.leave_job)
+        self.leave_job = self.root.after(120, self._do_leave)
+
+    def _do_leave(self):
+        if tb.cursor_over(self.hwnd):                  # 확정 직전에도 다시 확인
+            self.leave_job = None
+            return
+        self._do_leave_real()
+
+    def _do_leave_real(self):
+        self.leave_job = None
         self.hide_tooltip()
         self.hide_mini_tip()
         self.tooltip_entry = None
@@ -832,26 +914,30 @@ class StatusBar:
         self.schedule_cycle()                          # 방금 본 항목을 최소 한 주기 더 — 남은 시간이 아니라 주기 전체
 
     def set_hover(self, e, dots=False):
-        """항목 영역(또는 점 영역)에 둥근 하이라이트. 투명 키 색과 다른 색이라 실제로 그려진다."""
+        """항목 영역(또는 점 영역)의 히트 다각형 색만 바꿔 하이라이트. 아이템을 지우고 다시 만들지 않는다 → 깜빡임 없음."""
         c = self.canvas
-        c.delete("hover")
         clickable = dots or (e is not None and (self.switchable() or self.mode != "full"))
         c.configure(cursor="hand2" if clickable else "")
         dark = sum(self.bg) / 3 < 128
         fill, outline = ("#2c2c2c", "#3a3a3a") if dark else ("#e6e6e6", "#d0d0d0")
-        span = None
+        target = None
         if dots and self.dots_span:
-            span = (self.dots_span[0] - self.px(3), self.dots_span[1] + self.px(3))
+            target = "hit:dots"
         elif e is not None:
-            for x0, x1, ent in self.entry_spans:
+            for i, (x0, x1, ent) in enumerate(self.entry_spans):
                 if ent is e:
-                    span = (x0 - self.px(5), x1 + self.px(1))
+                    target = f"hit:{i}"
                     break
-        if span is None:
+        if target == self.hover_target:
             return
-        pts = rounded_points(span[0], self.px(4), span[1], self.h - self.px(4), self.px(6))
-        item = c.create_polygon(*pts, fill=fill, outline=outline, width=1, smooth=False, tags=("hover",))
-        c.tag_lower(item)
+        self.hover_target = target
+        for item in c.find_withtag("hit"):
+            c.itemconfigure(item, fill=self.hit, outline=self.hit)
+        c.dtag("hover", "hover")
+        if target:
+            for item in c.find_withtag(target):
+                c.itemconfigure(item, fill=fill, outline=outline)
+                c.addtag_withtag("hover", item)
 
     def show_mini_tip(self, text, x_root):
         """점 위 한 줄 툴팁 (카드 아님)."""
@@ -1127,6 +1213,7 @@ class StatusBar:
         ents = entries if entries is not None else [e for e in settings["entries"] if e["enabled"]]
         saved = (self.fg, self.dim, self.track, self.line, self.bg, self.mode)
         self.bg, self.fg, self.dim, self.track, self.line = (32, 32, 32), "#f0f0f0", "#a0a0a0", "#404040", "#505050"
+        saved_hit, self.hit = self.hit, "#202021"
         self._ov = {"settings": settings, "entries": ents, "data": self.preview_data(ents)}
         try:
             vis = self.visible_entries()
@@ -1136,6 +1223,7 @@ class StatusBar:
         finally:
             self._ov = None
             self.fg, self.dim, self.track, self.line, self.bg, self.mode = saved
+            self.hit = saved_hit
         return need
 
     def refresh_preview(self):
