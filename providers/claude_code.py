@@ -3,6 +3,14 @@ Claude Code 제공자 — Claude 구독(Pro/Max)의 5시간 / 7일 사용률.
 
 계정 = Claude Code 설정 폴더 (기본 %USERPROFILE%\\.claude, 또는 CLAUDE_CONFIG_DIR). 그 안의 .credentials.json 을 읽는다.
 
+자격증명 소스 (플랫폼별)
+- 파일: <폴더>/.credentials.json — Windows·Linux. 파일이 있으면 어느 플랫폼이든 이것을 먼저 쓴다.
+- macOS 키체인: Claude Code 는 macOS 에서 토큰을 파일 대신 로그인 키체인의 «Claude Code-credentials» 항목에 넣는다.
+  파일이 없고 macOS 이면 `security find-generic-password -s "Claude Code-credentials" -w` (Apple 기본 도구, 의존성 없음)
+  로 같은 JSON 을 읽는다. 키체인 항목은 사용자당 하나라 **기본 폴더(~/.claude 또는 CLAUDE_CONFIG_DIR)에만** 대응시킨다.
+  처음엔 macOS 가 «허용/항상 허용» 다이얼로그를 띄울 수 있다 — 그동안은 err_keychain_prompt, 거부하면 err_keychain_denied,
+  항목이 없으면 err_no_token. 토큰은 여기서도 요청 헤더에만 쓰고 어디에도 남기지 않는다.
+
 두 가지 데이터 원본
 - API 모드: GET https://api.anthropic.com/api/oauth/usage (비공식·문서화 안 됨) 를 5분마다.
 - 공식 모드: Claude Code 상태줄이 공식으로 넘겨주는 rate_limits 만 읽는다 (네트워크 0).
@@ -19,6 +27,8 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
+import sys
 from datetime import datetime
 
 from . import Provider
@@ -27,9 +37,16 @@ from version import USER_AGENT
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 DEFAULT_CONFIG_DIR = os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude"))
-OFFICIAL_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "AIStatusBar", "official")
+IS_MAC = sys.platform == "darwin"
+if IS_MAC:
+    OFFICIAL_DIR = os.path.join(os.path.expanduser("~/Library/Application Support"), "AIStatusBar", "official")
+else:
+    OFFICIAL_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "AIStatusBar", "official")
 STALE_AFTER_SEC = 600          # 이보다 오래된 상태줄 데이터는 흐리게 + «N분 전»
 PS1_NAME = "statusline_export.ps1"
+SH_NAME = "statusline_export.sh"            # macOS 판 export 스크립트 (zsh)
+KEYCHAIN_SERVICE = "Claude Code-credentials"   # macOS: Claude Code 가 토큰을 넣는 키체인 항목의 서비스 이름
+KEYCHAIN_TIMEOUT_SEC = 90                   # «허용» 다이얼로그가 떠 있는 동안 기다리는 시간 — 넘기면 err_keychain_prompt
 BACKUP_SUFFIX = ".bak-aistatusbar"
 
 
@@ -44,7 +61,8 @@ class ClaudeCode(Provider):
 
     # --- 계정 ---
     def discover(self):
-        """CLAUDE_CONFIG_DIR + 홈의 .claude* 중 .credentials.json 이 있는 것."""
+        """CLAUDE_CONFIG_DIR + 홈의 .claude* 중 .credentials.json 이 있는 것.
+        macOS 는 파일이 없어도 키체인 항목이 있으면 기본 폴더 하나를 더 찾는다 (항목 존재만 확인 — 다이얼로그 없음)."""
         found, seen = [], set()
         home = os.path.expanduser("~")
         cands = []
@@ -61,6 +79,10 @@ class ClaudeCode(Provider):
                 continue
             seen.add(key)
             found.append(d)
+        if IS_MAC:
+            d = os.path.abspath(DEFAULT_CONFIG_DIR)
+            if os.path.normcase(d) not in seen and keychain_item_exists():
+                found.insert(0, d)
         return found
 
     def label(self, path):
@@ -83,15 +105,16 @@ class ClaudeCode(Provider):
     def info(self, path):
         cp = os.path.join(path, self.cred_file)
         info = {"connected": False, "path": cp, "reason": "", "plan": None, "expires_at": None}
-        if not os.path.exists(cp):
-            info["reason"] = "err_no_token"
-            return info
         try:
-            with open(cp, encoding="utf-8") as f:
-                oauth = json.load(f)["claudeAiOauth"]
+            oauth = read_oauth(path)
+        except RuntimeError as e:
+            info["reason"] = str(e)
+            return info
         except Exception as e:
             info["reason"] = f"err_token_read {e}"
             return info
+        if not os.path.exists(cp):
+            info["path"] = "keychain:" + KEYCHAIN_SERVICE      # macOS 키체인에서 읽었다
         exp = datetime.fromtimestamp((oauth.get("expiresAt") or 0) / 1000)
         plan = (oauth.get("subscriptionType") or "").capitalize()
         if oauth.get("rateLimitTier"):
@@ -103,11 +126,7 @@ class ClaudeCode(Provider):
 
     # --- API 모드 ---
     def fetch(self, path):
-        cp = os.path.join(path, self.cred_file)
-        if not os.path.exists(cp):
-            raise RuntimeError("err_no_token")
-        with open(cp, encoding="utf-8") as f:
-            oauth = json.load(f)["claudeAiOauth"]
+        oauth = read_oauth(path)
         token, expires_at = oauth["accessToken"], oauth.get("expiresAt", 0)
         if expires_at and expires_at / 1000 < datetime.now().timestamp():
             raise RuntimeError("err_token_expired")
@@ -122,6 +141,58 @@ class ClaudeCode(Provider):
     # --- 공식 모드 ---
     def fetch_official(self, path):
         return read_official(path)
+
+
+# ---------- 자격증명 소스: 파일 → (macOS) 키체인 ----------
+
+def _is_default_dir(path):
+    return os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(DEFAULT_CONFIG_DIR))
+
+
+def read_oauth(path):
+    """<path>/.credentials.json 의 claudeAiOauth. 파일이 없으면 macOS 에서는 기본 폴더에 한해 키체인을 읽는다.
+    오류는 i18n 키(err_no_token / err_token_read <이유> / err_keychain_prompt / err_keychain_denied / err_keychain_read <이유>)."""
+    cp = os.path.join(path, ClaudeCode.cred_file)
+    if os.path.exists(cp):
+        with open(cp, encoding="utf-8") as f:
+            return json.load(f)["claudeAiOauth"]
+    if IS_MAC and _is_default_dir(path):
+        return read_keychain_oauth()
+    raise RuntimeError("err_no_token")
+
+
+def _security(args, timeout):
+    """`security` 호출 — 어디서 부르든 같은 인자·같은 예외 처리. (테스트가 이 함수를 대신 끼운다)"""
+    return subprocess.run(["/usr/bin/security"] + list(args), capture_output=True, text=True, timeout=timeout)
+
+
+def keychain_item_exists(service=KEYCHAIN_SERVICE):
+    """항목의 메타데이터만 조회(-w 없음) — 비밀 값을 읽지 않으므로 «허용» 다이얼로그가 뜨지 않는다."""
+    try:
+        return _security(["find-generic-password", "-s", service], timeout=10).returncode == 0
+    except Exception:
+        return False
+
+
+def read_keychain_oauth(service=KEYCHAIN_SERVICE):
+    """키체인 항목의 비밀 값(Claude Code 가 저장한 .credentials.json 과 같은 JSON) → claudeAiOauth.
+    security 종료 코드: 0 성공 · 44 항목 없음 · 128 사용자가 거부(errSecUserCanceled) · 그 외 err_keychain_read."""
+    try:
+        r = _security(["find-generic-password", "-s", service, "-w"], timeout=KEYCHAIN_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("err_keychain_prompt") from None      # 다이얼로그에서 아직 아무것도 안 눌렀다
+    except Exception as e:
+        raise RuntimeError(f"err_keychain_read {type(e).__name__}") from None
+    if r.returncode == 44 or "could not be found" in (r.stderr or ""):
+        raise RuntimeError("err_no_token")
+    if r.returncode == 128 or "User canceled" in (r.stderr or "") or "not allowed" in (r.stderr or ""):
+        raise RuntimeError("err_keychain_denied")
+    if r.returncode != 0:
+        raise RuntimeError(f"err_keychain_read rc={r.returncode}")   # stderr 는 남기지 않는다 (경로·계정명이 섞일 수 있다)
+    try:
+        return json.loads(r.stdout)["claudeAiOauth"]
+    except Exception as e:
+        raise RuntimeError(f"err_token_read {type(e).__name__}") from None
 
 
 def parse(data):
@@ -198,8 +269,11 @@ def backup_path(config_dir):
     return settings_path(config_dir) + BACKUP_SUFFIX
 
 
-def export_command(ps1_path):
-    return f'powershell -NoProfile -ExecutionPolicy Bypass -File "{ps1_path}"'
+def export_command(script_path):
+    """statusLine 명령. .ps1 → Windows PowerShell, .sh → macOS zsh (둘 다 경로를 따옴표로 감싼 인자 하나)."""
+    if str(script_path).endswith(".sh"):
+        return f'/bin/zsh "{script_path}"'
+    return f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script_path}"'
 
 
 def _load(path):
@@ -217,9 +291,13 @@ def _save(path, data):
     os.replace(tmp, path)
 
 
+def _is_ours(command):
+    return PS1_NAME in str(command) or SH_NAME in str(command)
+
+
 def statusline_installed(config_dir):
     sl = _load(settings_path(config_dir)).get("statusLine") or {}
-    return PS1_NAME in str(sl.get("command", ""))
+    return _is_ours(sl.get("command", ""))
 
 
 def statusline_install(config_dir, ps1_path):
@@ -229,7 +307,7 @@ def statusline_install(config_dir, ps1_path):
     if os.path.isfile(sp):
         shutil.copy2(sp, backup_path(config_dir))
     original = data.get("statusLine")
-    if original and PS1_NAME in str(original.get("command", "")):
+    if original and _is_ours(original.get("command", "")):
         original = None                     # 이미 우리 것 — 원본은 보관본 그대로
     else:
         os.makedirs(OFFICIAL_DIR, exist_ok=True)

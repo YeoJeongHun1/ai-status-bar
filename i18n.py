@@ -17,12 +17,31 @@ _current = "en"
 
 
 def detect_language():
-    """Windows 표시 언어의 primary LANGID → 지원 언어 코드. 모르면 en."""
+    """Windows 표시 언어의 primary LANGID → 지원 언어 코드. macOS 는 시스템 «선호 언어» 첫 항목. 모르면 en."""
     try:
         langid = ctypes.windll.kernel32.GetUserDefaultUILanguage() & 0x3FF
     except Exception:
-        return "en"
+        return _detect_language_posix()
     return {0x12: "ko", 0x11: "ja", 0x16: "pt", 0x0A: "es"}.get(langid, "en")
+
+
+def _detect_language_posix():
+    """macOS: NSLocale.preferredLanguages (pyobjc 가 있을 때). 없으면 LANG 류 환경변수. 모르면 en."""
+    code = ""
+    try:
+        from Foundation import NSLocale                 # macOS 앱(rumps)에는 항상 있다
+        code = str((NSLocale.preferredLanguages() or [""])[0])
+    except Exception:
+        import os
+        for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
+            if os.environ.get(var):
+                code = os.environ[var]
+                break
+    code = code.replace("_", "-").lower()
+    for lang in ("ko", "ja", "pt", "es"):
+        if code == lang or code.startswith(lang + "-"):
+            return lang
+    return "en"
 
 
 def set_language(code):
@@ -150,7 +169,7 @@ STRINGS = {
         "  ②  같은 폴더에서 /login 으로 계정을 바꿔 가며 쓴다 → 파일에는 마지막 계정 하나만 남습니다.\n"
         "  ③  claude setup-token + CLAUDE_CODE_OAUTH_TOKEN 환경변수 방식 → 토큰이 파일로 저장되지 않아 볼 수 없습니다 (지원 안 함).\n"
         "  ④  설정 폴더가 기본 위치 밖에 있다(CLAUDE_CONFIG_DIR) → «폴더 추가…» 로 직접 지정하세요.\n"
-        "  macOS 는 키체인에 저장돼 파일이 없습니다 — 이 앱은 Windows 전용입니다."
+        "  macOS 는 키체인에 저장돼 파일이 없습니다 — macOS 판(ai_status_bar_mac.py)이 키체인에서 읽습니다."
     ),
     "help_codex_body": (
         "파일: <설정 폴더>\\auth.json  (기본 폴더 %USERPROFILE%\\.codex)\n"
@@ -286,7 +305,7 @@ STRINGS = {
         "  ②  You switch accounts with /login in the same folder → only the last one is kept in the file.\n"
         "  ③  You use claude setup-token + the CLAUDE_CODE_OAUTH_TOKEN environment variable → the token is never written to a file (not supported).\n"
         "  ④  Your config folder is outside the default via CLAUDE_CONFIG_DIR → use «Add folder…».\n"
-        "  On macOS the token lives in the Keychain, not a file — this app is Windows-only."
+        "  On macOS the token lives in the Keychain, not a file — the macOS version (ai_status_bar_mac.py) reads it from there."
     ),
     "help_codex_body": (
         "File: <config folder>\\auth.json  (default folder %USERPROFILE%\\.codex)\n"
@@ -422,7 +441,7 @@ STRINGS = {
         "  ②  同じフォルダーで /login を使ってアカウントを切り替えている → ファイルには最後のアカウントだけが残ります。\n"
         "  ③  claude setup-token と環境変数 CLAUDE_CODE_OAUTH_TOKEN を使っている → トークンがファイルに保存されないため見えません (非対応)。\n"
         "  ④  設定フォルダーが既定以外にある (CLAUDE_CONFIG_DIR) → 「フォルダーを追加…」で指定してください。\n"
-        "  macOS はトークンをキーチェーンに保存するためファイルがありません — このアプリは Windows 専用です。"
+        "  macOS はトークンをキーチェーンに保存するためファイルがありません — macOS 版(ai_status_bar_mac.py)がキーチェーンから読み取ります。"
     ),
     "help_codex_body": (
         "ファイル: <設定フォルダー>\\auth.json  (既定フォルダー %USERPROFILE%\\.codex)\n"
@@ -558,7 +577,7 @@ STRINGS = {
         "  ②  Você troca de conta com /login na mesma pasta → só a última fica no arquivo.\n"
         "  ③  Você usa claude setup-token + a variável CLAUDE_CODE_OAUTH_TOKEN → o token nunca é gravado em arquivo (não suportado).\n"
         "  ④  Sua pasta de configuração está fora do padrão via CLAUDE_CONFIG_DIR → use «Adicionar pasta…».\n"
-        "  No macOS o token fica no Keychain, não em arquivo — este app é só para Windows."
+        "  No macOS o token fica no Keychain, não em arquivo — a versão para macOS (ai_status_bar_mac.py) o lê de lá."
     ),
     "help_codex_body": (
         "Arquivo: <pasta de configuração>\\auth.json  (pasta padrão %USERPROFILE%\\.codex)\n"
@@ -694,7 +713,7 @@ STRINGS = {
         "  ②  Cambias de cuenta con /login en la misma carpeta → solo la última queda en el archivo.\n"
         "  ③  Usas claude setup-token + la variable CLAUDE_CODE_OAUTH_TOKEN → el token nunca se guarda en un archivo (no compatible).\n"
         "  ④  Tu carpeta de configuración está fuera de la predeterminada vía CLAUDE_CONFIG_DIR → usa «Añadir carpeta…».\n"
-        "  En macOS el token vive en el Llavero, no en un archivo — esta app es solo para Windows."
+        "  En macOS el token vive en el Llavero, no en un archivo — la versión para macOS (ai_status_bar_mac.py) lo lee de ahí."
     ),
     "help_codex_body": (
         "Archivo: <carpeta de configuración>\\auth.json  (carpeta predeterminada %USERPROFILE%\\.codex)\n"
@@ -1083,4 +1102,150 @@ EXTRA = {
 },
 }
 for _lang, _d in EXTRA.items():
+    STRINGS[_lang].update(_d)
+
+# ------------------------------------------------------------------ macOS 메뉴 막대 판 (ai_status_bar_mac.py) 키
+MAC = {
+"ko": {
+    "mac_menu_usage_pages": "사용량 페이지 열기",
+    "err_keychain_prompt": "키체인 접근 허용 필요 — macOS 다이얼로그에서 «항상 허용»을 누르세요",
+    "err_keychain_denied": "키체인 접근이 거부됨 — 키체인 접근 앱에서 «Claude Code-credentials» 항목에 security 접근을 허용하거나 다음 조회 때 «항상 허용»을 누르세요",
+    "err_keychain_read": "키체인을 읽을 수 없음: {x}",
+    "mac_no_entries": "계정 없음 — 터미널에서 claude 또는 codex login 으로 로그인한 뒤 «다시 탐색»",
+    "mac_menu_display": "표시 방식",
+    "mac_mode_all": "모든 항목 동시에",
+    "mac_mode_click": "하나씩 («다음 항목»으로 전환)",
+    "mac_mode_slide": "자동 슬라이드",
+    "mac_mode_fixed": "하나만 고정",
+    "mac_slide_sec": "{sec}초",
+    "mac_menu_label": "계정 라벨 표시",
+    "mac_menu_scoped": "모델별 한도 표시 (비공식 API 에서만)",
+    "mac_menu_autostart": "로그인할 때 자동 시작",
+    "mac_menu_language": "언어 / Language",
+    "mac_menu_data_source": "데이터 원본",
+    "mac_ds_api": "비공식 API — 5분마다 조회",
+    "mac_ds_official": "공식 모드 — Claude Code 상태줄 데이터만 (네트워크 0)",
+    "mac_statusline_item": "{label} — {action}",
+    "mac_menu_about": "정보…",
+    "mac_about_title": "AI Status Bar {version} — macOS 메뉴 막대",
+    "mac_about_keychain": "macOS 에서는 Claude 토큰을 파일 대신 로그인 키체인의 «Claude Code-credentials» 항목에서 Apple 기본 도구 /usr/bin/security 로 읽습니다. 읽기만 하고 갱신·저장하지 않습니다.",
+    "mac_about_remove": "제거: 공식 모드를 썼다면 먼저 «상태줄 연결 해제», 그다음 «로그인할 때 자동 시작»을 끄고(또는 mac/uninstall.sh) 폴더를 지우면 됩니다. 남는 것은 ~/Library/Application Support/AIStatusBar(설정·venv) 와 ~/Library/Logs/AIStatusBar(오류 로그) 뿐입니다.",
+    "mac_setup_hint": "macOS 판에는 설정 창이 없습니다 — 메뉴 막대의 사용량 글자를 클릭해 메뉴에서 바꿉니다. 설정 파일: {path}",
+    "mac_title_no_entries": "AI —",
+    "mac_reset": "리셋 {t}",
+},
+"en": {
+    "mac_menu_usage_pages": "Open usage page",
+    "err_keychain_prompt": "Keychain access needed — click «Always Allow» in the macOS dialog",
+    "err_keychain_denied": "Keychain access denied — allow «security» on the «Claude Code-credentials» item in Keychain Access, or click «Always Allow» at the next check",
+    "err_keychain_read": "Cannot read the Keychain: {x}",
+    "mac_no_entries": "No accounts — log in with claude or codex login in a terminal, then «Rescan»",
+    "mac_menu_display": "Display mode",
+    "mac_mode_all": "All entries at once",
+    "mac_mode_click": "One at a time (switch with «Next entry»)",
+    "mac_mode_slide": "Auto slide",
+    "mac_mode_fixed": "Pin one entry",
+    "mac_slide_sec": "{sec} s",
+    "mac_menu_label": "Show account label",
+    "mac_menu_scoped": "Show per-model caps (unofficial API only)",
+    "mac_menu_autostart": "Start at login",
+    "mac_menu_language": "Language",
+    "mac_menu_data_source": "Data source",
+    "mac_ds_api": "Unofficial API — every 5 minutes",
+    "mac_ds_official": "Official mode — Claude Code status-line data only (zero network)",
+    "mac_statusline_item": "{label} — {action}",
+    "mac_menu_about": "About…",
+    "mac_about_title": "AI Status Bar {version} — macOS menu bar",
+    "mac_about_keychain": "On macOS the Claude token is read from the «Claude Code-credentials» item in your login Keychain (not a file) with Apple's built-in /usr/bin/security. Read only; never refreshed or stored.",
+    "mac_about_remove": "To remove: if you used official mode, «Remove status line link» first; then turn off «Start at login» (or run mac/uninstall.sh) and delete the folder. What remains is ~/Library/Application Support/AIStatusBar (settings, venv) and ~/Library/Logs/AIStatusBar (error log).",
+    "mac_setup_hint": "The macOS version has no settings window — click the usage text in the menu bar and change things in the menu. Settings file: {path}",
+    "mac_title_no_entries": "AI —",
+    "mac_reset": "resets {t}",
+},
+"ja": {
+    "mac_menu_usage_pages": "使用量ページを開く",
+    "err_keychain_prompt": "キーチェーンへのアクセス許可が必要です — macOS のダイアログで「常に許可」を押してください",
+    "err_keychain_denied": "キーチェーンへのアクセスが拒否されました — キーチェーンアクセスで「Claude Code-credentials」項目に security を許可するか、次回の確認時に「常に許可」を押してください",
+    "err_keychain_read": "キーチェーンを読み取れません: {x}",
+    "mac_no_entries": "アカウントなし — ターミナルで claude または codex login でログインし、「再検索」",
+    "mac_menu_display": "表示方法",
+    "mac_mode_all": "すべての項目を同時に",
+    "mac_mode_click": "1つずつ(「次の項目」で切り替え)",
+    "mac_mode_slide": "自動スライド",
+    "mac_mode_fixed": "1つを固定",
+    "mac_slide_sec": "{sec}秒",
+    "mac_menu_label": "アカウントラベルを表示",
+    "mac_menu_scoped": "モデル別上限を表示(非公式 API のみ)",
+    "mac_menu_autostart": "ログイン時に自動起動",
+    "mac_menu_language": "言語 / Language",
+    "mac_menu_data_source": "データソース",
+    "mac_ds_api": "非公式 API — 5分ごとに取得",
+    "mac_ds_official": "公式モード — Claude Code ステータスラインのデータのみ(ネットワーク 0)",
+    "mac_statusline_item": "{label} — {action}",
+    "mac_menu_about": "情報…",
+    "mac_about_title": "AI Status Bar {version} — macOS メニューバー",
+    "mac_about_keychain": "macOS では Claude のトークンをファイルではなくログインキーチェーンの「Claude Code-credentials」項目から Apple 標準ツール /usr/bin/security で読み取ります。読み取りのみで、更新・保存はしません。",
+    "mac_about_remove": "削除: 公式モードを使っていたら先に「ステータスライン連携を解除」、次に「ログイン時に自動起動」をオフにし(または mac/uninstall.sh)、フォルダを削除します。残るのは ~/Library/Application Support/AIStatusBar(設定・venv)と ~/Library/Logs/AIStatusBar(エラーログ)だけです。",
+    "mac_setup_hint": "macOS 版には設定ウィンドウがありません — メニューバーの使用量の文字をクリックしてメニューから変更します。設定ファイル: {path}",
+    "mac_title_no_entries": "AI —",
+    "mac_reset": "リセット {t}",
+},
+"pt": {
+    "mac_menu_usage_pages": "Abrir página de uso",
+    "err_keychain_prompt": "É preciso permitir o acesso às Chaves — clique em «Sempre Permitir» na caixa de diálogo do macOS",
+    "err_keychain_denied": "Acesso às Chaves negado — permita «security» no item «Claude Code-credentials» no Acesso às Chaves, ou clique em «Sempre Permitir» na próxima verificação",
+    "err_keychain_read": "Não foi possível ler as Chaves: {x}",
+    "mac_no_entries": "Nenhuma conta — faça login com claude ou codex login em um terminal e depois «Procurar novamente»",
+    "mac_menu_display": "Modo de exibição",
+    "mac_mode_all": "Todas as entradas de uma vez",
+    "mac_mode_click": "Uma por vez (troque com «Próxima entrada»)",
+    "mac_mode_slide": "Slide automático",
+    "mac_mode_fixed": "Fixar uma entrada",
+    "mac_slide_sec": "{sec} s",
+    "mac_menu_label": "Mostrar rótulo da conta",
+    "mac_menu_scoped": "Mostrar limites por modelo (somente API não oficial)",
+    "mac_menu_autostart": "Iniciar ao fazer login",
+    "mac_menu_language": "Idioma / Language",
+    "mac_menu_data_source": "Fonte de dados",
+    "mac_ds_api": "API não oficial — a cada 5 minutos",
+    "mac_ds_official": "Modo oficial — somente dados da linha de status do Claude Code (zero rede)",
+    "mac_statusline_item": "{label} — {action}",
+    "mac_menu_about": "Sobre…",
+    "mac_about_title": "AI Status Bar {version} — barra de menus do macOS",
+    "mac_about_keychain": "No macOS o token do Claude é lido do item «Claude Code-credentials» das suas Chaves de login (não de um arquivo) com a ferramenta nativa da Apple /usr/bin/security. Somente leitura; nunca é renovado nem armazenado.",
+    "mac_about_remove": "Para remover: se usou o modo oficial, primeiro «Remover vínculo da linha de status»; depois desative «Iniciar ao fazer login» (ou execute mac/uninstall.sh) e apague a pasta. Restam apenas ~/Library/Application Support/AIStatusBar (configurações, venv) e ~/Library/Logs/AIStatusBar (log de erros).",
+    "mac_setup_hint": "A versão para macOS não tem janela de configurações — clique no texto de uso na barra de menus e altere pelo menu. Arquivo de configurações: {path}",
+    "mac_title_no_entries": "AI —",
+    "mac_reset": "reinicia {t}",
+},
+"es": {
+    "mac_menu_usage_pages": "Abrir página de uso",
+    "err_keychain_prompt": "Se necesita acceso al llavero — pulsa «Permitir siempre» en el diálogo de macOS",
+    "err_keychain_denied": "Acceso al llavero denegado — permite «security» en el elemento «Claude Code-credentials» en Acceso a Llaveros, o pulsa «Permitir siempre» en la próxima comprobación",
+    "err_keychain_read": "No se puede leer el llavero: {x}",
+    "mac_no_entries": "Sin cuentas — inicia sesión con claude o codex login en un terminal y luego «Volver a buscar»",
+    "mac_menu_display": "Modo de visualización",
+    "mac_mode_all": "Todas las entradas a la vez",
+    "mac_mode_click": "De una en una (cambia con «Siguiente entrada»)",
+    "mac_mode_slide": "Desplazamiento automático",
+    "mac_mode_fixed": "Fijar una entrada",
+    "mac_slide_sec": "{sec} s",
+    "mac_menu_label": "Mostrar etiqueta de la cuenta",
+    "mac_menu_scoped": "Mostrar límites por modelo (solo API no oficial)",
+    "mac_menu_autostart": "Iniciar al iniciar sesión",
+    "mac_menu_language": "Idioma / Language",
+    "mac_menu_data_source": "Fuente de datos",
+    "mac_ds_api": "API no oficial — cada 5 minutos",
+    "mac_ds_official": "Modo oficial — solo datos de la línea de estado de Claude Code (cero red)",
+    "mac_statusline_item": "{label} — {action}",
+    "mac_menu_about": "Acerca de…",
+    "mac_about_title": "AI Status Bar {version} — barra de menús de macOS",
+    "mac_about_keychain": "En macOS el token de Claude se lee del elemento «Claude Code-credentials» de tu llavero de inicio de sesión (no de un archivo) con la herramienta nativa de Apple /usr/bin/security. Solo lectura; nunca se renueva ni se guarda.",
+    "mac_about_remove": "Para desinstalar: si usaste el modo oficial, primero «Quitar enlace de la línea de estado»; luego desactiva «Iniciar al iniciar sesión» (o ejecuta mac/uninstall.sh) y borra la carpeta. Solo quedan ~/Library/Application Support/AIStatusBar (ajustes, venv) y ~/Library/Logs/AIStatusBar (registro de errores).",
+    "mac_setup_hint": "La versión para macOS no tiene ventana de ajustes — haz clic en el texto de uso de la barra de menús y cámbialos desde el menú. Archivo de ajustes: {path}",
+    "mac_title_no_entries": "AI —",
+    "mac_reset": "se reinicia {t}",
+},
+}
+for _lang, _d in MAC.items():
     STRINGS[_lang].update(_d)
