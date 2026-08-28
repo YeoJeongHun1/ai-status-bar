@@ -26,13 +26,14 @@ Claude work   5h ▬▬▬░░░░░ 23% ↺12:09   │   Codex work   5h �
 ## 특징
 
 - **2줄 표시, 필요한 정보만** — 위 5시간, 아래 주간. 리셋 시각은 「몇 분 후」가 아니라 이 PC 현지 시각(`↺12:10`, 오늘이 아니면 `↺09/01 13:00`).
-  서비스·계정·폴더·플랜·마지막 조회는 바에 **마우스를 올리면 툴팁**으로 보입니다 — 바 자체에는 글자를 더 얹지 않습니다.
+  서비스·계정·폴더·플랜·마지막 조회는 바에 **마우스를 올리면 카드 툴팁**(서비스 칩 · 창별 미니 막대 · 플랜 칩)으로 보이고, 올린 항목은 둥글게 강조됩니다 — 바 자체에는 글자를 더 얹지 않습니다.
 - **색** — 초록(<50%) · 노랑(50~79%) · 빨강(80%+). 80% / 95% 를 넘는 순간 알림 1회.
 - **표시 방식 커스텀** — 모든 항목 동시에 / 클릭으로 전환 / 자동 슬라이드(주기 설정) / 하나 고정. 항목 순서·라벨·창(5h/7d) 선택.
 - **스타일** — 계정 라벨 on/off(기본 off), 막대 «자동 / 막대+숫자 / 숫자만», 라벨 색.
 - **설정 창 = 라이브 미리보기 + 프리셋** — 어떤 값을 바꿔도 위쪽 미리보기가 즉시 다시 그려지고, «기본 / 미니멀 / 라벨 포함 / 풀 정보 / 슬라이드 / 고정» 카드를 누르면 한 번에 적용됩니다. «저장» 은 적용만 하고 창은 남습니다(닫기는 따로).
 - **배경 투명** — 글자·막대만 그려지고, 나머지 영역은 클릭이 작업 표시줄로 통과합니다.
 - **빈 공간 자동 배치** — 작업 표시줄을 캡처해 실제로 비어 있는 열을 찾고, 그중 가장 왼쪽에 놓습니다. 해상도·DPI·정렬·위젯·앱 수가 달라도 같은 코드가 돕니다.
+  왼쪽 날씨 위젯의 경계는 UI Automation 으로 정확히 읽고(외부 프로세스 없이 COM 직접 호출), 위젯 바로 뒤에는 28px 여백을 둡니다. 20초마다 다시 재고, 2초마다 우리 자리 양끝 밑에 뭔가 들어왔는지 확인해 즉시 옮깁니다 — 날씨 문구가 길어져도 겹치지 않습니다.
 - **폭에 따라 3단계** — 막대+숫자 → 숫자만 → `›` 버튼(누르면 위로 상세 팝업).
 - **깜빡이지 않음** — 창을 화면 캡처에서 제외(`WDA_EXCLUDEFROMCAPTURE`)해 두고 재므로, 앱을 바꿔도 바가 숨었다 나타나지 않습니다. 전체화면 앱이 앞에 오면 숨깁니다.
 - **작업 표시줄 버튼을 차지하지 않음** — 오른쪽 `^` 트레이 안의 아이콘으로만 존재합니다.
@@ -228,7 +229,8 @@ A tiny Windows utility that shows your **AI subscription usage (5-hour / weekly 
 
 - Two lines per entry (5h / weekly) with bars, percentages and the **local reset time**; entry = service × account, several accounts per service supported.
 - **Display modes**: all entries at once / switch on click / auto slide (interval) / pin one. Per-entry order, label, and which windows to show.
-- **Only what matters on the bar**: service, account, folder, plan and last fetch appear in a **hover tooltip**, not on the bar itself.
+- **Only what matters on the bar**: service, account, folder, plan and last fetch appear in a **hover card** (service chip, mini bars per window, plan chip) with the hovered entry highlighted — not on the bar itself.
+- **No overlap with the weather widget**: its exact edge is read via UI Automation (in-process COM, no external process) with a 28px gap; the bar re-measures every 20s and checks every 2s whether something slid under its edges, moving at once.
 - **Style**: account label on/off (off by default), bars «auto / bars+numbers / numbers only», label color.
 - **Settings = live preview + presets**: every change redraws the preview at the top instantly; preset cards (Default / Minimal / With labels / Full info / Slide / Pinned) apply a whole look at once. **Save** applies and keeps the window open; closing with unsaved changes asks.
 - Transparent, click-through background; **auto-placement** by measuring the taskbar's empty columns; shrinks to numbers-only, then to a `›` button with a popup.

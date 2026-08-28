@@ -697,6 +697,7 @@ STRINGS = {
 # ------------------------------------------------------------------ v1.1 추가 키 (미리보기·프리셋·탭·저장·툴팁)
 EXTRA = {
 "ko": {
+    'tt_fetched_only': '조회 {time} 성공',
     'tab_entries': '항목',
     'tab_display': '표시 · 스타일',
     'tab_data': '데이터',
@@ -748,6 +749,7 @@ EXTRA = {
     'tt_loading': '조회 중…',
 },
 "en": {
+    'tt_fetched_only': 'fetched {time} OK',
     'tab_entries': 'Entries',
     'tab_display': 'Display & style',
     'tab_data': 'Data',
@@ -799,6 +801,7 @@ EXTRA = {
     'tt_loading': 'loading…',
 },
 "ja": {
+    'tt_fetched_only': '{time} に取得成功',
     'tab_entries': '項目',
     'tab_display': '表示・スタイル',
     'tab_data': 'データ',
@@ -850,6 +853,7 @@ EXTRA = {
     'tt_loading': '取得中…',
 },
 "pt": {
+    'tt_fetched_only': 'consulta {time} OK',
     'tab_entries': 'Itens',
     'tab_display': 'Exibição e estilo',
     'tab_data': 'Dados',
@@ -901,6 +905,7 @@ EXTRA = {
     'tt_loading': 'carregando…',
 },
 "es": {
+    'tt_fetched_only': 'consulta {time} OK',
     'tab_entries': 'Elementos',
     'tab_display': 'Visualización y estilo',
     'tab_data': 'Datos',

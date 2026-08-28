@@ -44,7 +44,10 @@ POLL_SEC = int(os.environ.get("AI_STATUS_BAR_POLL_SEC", "300"))   # API 모드 �
 OFFICIAL_POLL_SEC = 30                                            # 공식 모드는 로컬 파일만 읽으므로 자주 봐도 된다
 ALERT_STEPS = (80, 95)
 MARGIN = 16             # 빈 구간 양끝에서 띄우는 여백(px, DPI 배율 전 기준)
-REMEASURE_SEC = 120     # 아무 변화 없어도 이 주기로 다시 잰다
+REMEASURE_SEC = 20      # 아무 변화 없어도 이 주기로 다시 잰다 (위젯 문구가 길어지는 것 등 — 캡처 제외라 깜빡임 없음)
+EDGE_MARGIN = 28        # 빈 구간이 화면 왼쪽 가장자리 블록(위젯·시작 버튼) 바로 뒤일 때의 왼쪽 여백
+RIGHT_MARGIN = 20       # 다음 내용 앞 여백
+EDGE_BAND = 24          # 우리 창 양끝 몇 px 열을 «밑에 뭐가 들어왔나» 감시할지
 POPUP_SEC = 12          # 상세 팝업 자동 닫힘
 
 FROZEN = getattr(sys, "frozen", False)
@@ -408,7 +411,18 @@ class StatusBar:
                 self.root.update()
                 self.root.after(60)
             gaps, bg = tb.measure_free_gaps(min_width=self.px(24) + 2 * m)
-            self.gaps = [(x0 + m, x1 - m) for x0, x1 in gaps]
+            tb_left = tb.win_rect(tb.taskbar())[0]
+            widgets_right = tb.widgets_button_right()          # UIA 로 잡은 위젯 버튼 경계 — 픽셀 결과와 OR
+            fixed = []
+            for i, (x0, x1) in enumerate(gaps):
+                if widgets_right is not None and x0 < widgets_right:
+                    x0 = widgets_right
+                    if x1 - x0 < self.px(24):
+                        continue
+                edge = (i == 0 and x0 > tb_left + 2)            # 화면 왼쪽 가장자리 블록 바로 뒤
+                ml = self.px(EDGE_MARGIN) if edge else m
+                fixed.append((x0 + ml, x1 - self.px(RIGHT_MARGIN)))
+            self.gaps = [g for g in fixed if g[1] - g[0] >= self.px(24)]
             self.set_palette(bg)
             self.canvas.configure(bg=self.key)
             self.root.configure(bg=self.key)
@@ -441,11 +455,24 @@ class StatusBar:
                 self.relayout(force=True)
             elif tb.taskbar_signature() != self.signature:
                 self.relayout()
+            elif self.capture_excluded and self.something_under_edges():
+                self.relayout(force=True)              # 위젯 문구가 길어져 우리 밑으로 들어옴 → 즉시 자리 옮김
             else:
                 tb.raise_topmost(self.hwnd)
         except Exception:
             pass
         self.root.after(2000, self.watch)
+
+    def something_under_edges(self):
+        """우리 창 양끝 EDGE_BAND 열 밑에 내용 픽셀이 있으면 True (우리는 캡처에서 빠져 있어 밑이 보인다)."""
+        try:
+            l, t_, r, b = tb.win_rect(self.hwnd)
+            if r - l < self.px(60) or self.mode == "collapsed":
+                return False
+            left_hit, right_hit = tb.strip_has_content(l, t_ + self.px(6), r, b - self.px(6), self.px(EDGE_BAND))
+            return left_hit or right_hit
+        except Exception:
+            return False
 
     def periodic_measure(self):
         if not self.hidden_fullscreen:
@@ -633,14 +660,34 @@ class StatusBar:
         if e is not self.tooltip_entry:
             self.hide_tooltip()
             self.tooltip_entry = e
+            self.set_hover(e)
             if e is not None:
-                self.tooltip_job = self.root.after(400, lambda: self.show_tooltip(e, ev.x_root))
+                self.tooltip_job = self.root.after(400, lambda: self.show_tooltip(e, ev.x_root, ev.y_root))
         elif self.tooltip and e is not None:
-            self.place_tooltip(ev.x_root)
+            self.place_tooltip(ev.x_root, ev.y_root)
+        elif e is not None and not self.canvas.find_withtag("hover"):
+            self.set_hover(e)                          # relayout 이 지운 뒤 다시
 
     def on_leave(self, ev=None):
         self.hide_tooltip()
         self.tooltip_entry = None
+        self.set_hover(None)
+
+    def set_hover(self, e):
+        """항목 영역에 둥근 하이라이트. 투명 키 색과 다른 색이라 실제로 그려진다."""
+        c = self.canvas
+        c.delete("hover")
+        c.configure(cursor="hand2" if (e is not None and (self.switchable() or self.mode != "full")) else "")
+        if e is None:
+            return
+        for x0, x1, ent in self.entry_spans:
+            if ent is e:
+                dark = sum(self.bg) / 3 < 128
+                fill, outline = ("#2c2c2c", "#3a3a3a") if dark else ("#e6e6e6", "#d0d0d0")
+                pts = rounded_points(x0 - self.px(5), self.px(4), x1 + self.px(1), self.h - self.px(4), self.px(6))
+                item = c.create_polygon(*pts, fill=fill, outline=outline, width=1, smooth=False, tags=("hover",))
+                c.tag_lower(item)
+                break
 
     def tooltip_text(self, e):
         p = get_provider(e["provider"])
@@ -667,20 +714,98 @@ class StatusBar:
             lines.append(t("tt_loading"))
         return "\n".join(lines)
 
-    def show_tooltip(self, e, x_root):
+    TIP_W = 260
+    PROVIDER_COLOR = {"claude_code": "#D97757", "codex": "#10A37F"}
+
+    def show_tooltip(self, e, x_root, y_root=None):
+        """카드형 툴팁 — 전부 Canvas 에 그린다: 서비스 칩 + 라벨 / 폴더 / 창별 미니 막대 / 모델별 칩 / 플랜·조회."""
         self.tooltip_job = None
         if self.tooltip or self.tooltip_entry is not e:
             return
         tip = tk.Toplevel(self.root)
         tip.overrideredirect(True)
         tip.attributes("-topmost", True)
-        tip.configure(bg="#3a3a3a")
-        tk.Label(tip, text=self.tooltip_text(e), justify="left", bg="#202020", fg="#f0f0f0",
-                 font=("Segoe UI", 9), padx=10, pady=7).pack(padx=1, pady=1)
+        key = "#010203"                                   # 카드 모서리 밖을 투명하게
+        tip.configure(bg=key)
+        try:
+            tip.attributes("-transparentcolor", key)
+        except Exception:
+            pass
+        c = tk.Canvas(tip, bg=key, highlightthickness=0, bd=0)
+        c.pack()
+        w_, h_ = self.draw_tooltip_card(c, e)
+        c.configure(width=w_, height=h_)
         self.tooltip = tip
-        self.place_tooltip(x_root)
+        self.place_tooltip(x_root, y_root)
 
-    def place_tooltip(self, x_root):
+    def chip(self, c, x, cy, text, bg, fg="#ffffff", font=None, pad=7):
+        """둥근 알약 칩. 오른쪽 끝 x 를 돌려준다."""
+        font = font or self.font(8, True)
+        tid = c.create_text(0, 0, text=text, font=font, anchor="w", fill=fg)
+        bb = c.bbox(tid)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        hh = th + self.px(4)
+        pts = rounded_points(x, cy - hh / 2, x + tw + 2 * self.px(pad), cy + hh / 2, hh / 2)
+        c.create_polygon(*pts, fill=bg, outline=bg, tags=("chip",))
+        c.coords(tid, x + self.px(pad), cy)
+        c.tag_raise(tid)
+        return x + tw + 2 * self.px(pad)
+
+    def draw_tooltip_card(self, c, e):
+        p = get_provider(e["provider"])
+        d = self.data.get(entry_key(e)) or {}
+        u = d.get("usage")
+        W, pad, line = self.px(self.TIP_W), self.px(12), self.px(20)
+        rows = 2 + (len(u["windows"]) if u else 1) + (1 if u and u.get("scoped") and self.settings["show_scoped"] else 0) + 1
+        H = pad * 2 + rows * line + self.px(6)
+        c.delete("all")
+        c.create_polygon(*rounded_points(1, 1, W - 1, H - 1, self.px(9)), fill="#1e1e1e", outline="#444444", width=1, smooth=False)
+        y = pad + line // 2
+        x = self.chip(c, pad, y, p.name, self.PROVIDER_COLOR.get(p.id, "#555555"))
+        c.create_text(x + self.px(8), y, text=e["label"], fill="#ffffff", font=self.font(10, True), anchor="w")
+        y += line
+        c.create_text(pad, y, text=e["path"], fill="#9a9a9a", font=self.font(8), anchor="w")
+        y += line
+        if u:
+            for w in u["windows"]:
+                col = self.rgb(color_for(w["pct"]))
+                c.create_text(pad, y, text=w["key"], fill="#c0c0c0", font=self.font(9), anchor="w")
+                bx = pad + self.px(26)
+                bw, bh = self.px(120), self.px(7)
+                c.create_rectangle(bx, y - bh // 2, bx + bw, y + bh // 2, fill="#3a3a3a", outline="", tags=("minibar",))
+                fw = int(bw * min(w["pct"], 100) / 100)
+                if fw:
+                    c.create_rectangle(bx, y - bh // 2, bx + fw, y + bh // 2, fill=col, outline="", tags=("minibar",))
+                c.create_text(bx + bw + self.px(8), y, text=f"{w['pct']:.0f}%", fill=col, font=self.font(10, True), anchor="w")
+                c.create_text(bx + bw + self.px(48), y, text=t("tt_reset", t=fmt_reset(w["resets_at"])), fill="#9a9a9a", font=self.font(8), anchor="w")
+                y += line
+            if u.get("scoped") and self.settings["show_scoped"]:
+                x = pad
+                for s_ in u["scoped"]:
+                    x = self.chip(c, x, y, f"{s_['model']} {s_['pct']:.0f}%", "#333333", fg=self.rgb(color_for(s_["pct"]))) + self.px(6)
+                y += line
+        else:
+            c.create_text(pad, y, text=t("tt_error", err=tr_error(d["error"])) if d.get("error") else t("tt_loading"),
+                          fill="#e0a030" if d.get("error") else "#9a9a9a", font=self.font(9), anchor="w")
+            y += line
+        # 마지막 줄: 플랜 칩 + 조회/오류/공식
+        x = pad
+        try:
+            plan = p.info(e["path"]).get("plan")
+        except Exception:
+            plan = None
+        if plan:
+            x = self.chip(c, x, y, str(plan), "#2f3b52", fg="#cfe0ff") + self.px(8)
+        if d.get("error") and u:
+            c.create_text(x, y, text=t("tt_error", err=tr_error(d["error"])), fill="#e0a030", font=self.font(8), anchor="w")
+        elif self.official() and d.get("saved_at"):
+            age = int((datetime.now() - d["saved_at"]).total_seconds() // 60)
+            c.create_text(x, y, text=t("tt_official_ago", m=age) if age >= 1 else t("tt_official"), fill="#9a9a9a", font=self.font(8), anchor="w")
+        elif d.get("last_ok"):
+            c.create_text(x, y, text=t("tt_fetched_only", time=d["last_ok"].strftime("%H:%M:%S")), fill="#9a9a9a", font=self.font(8), anchor="w")
+        return W, H
+
+    def place_tooltip(self, x_root, y_root=None):
         if not self.tooltip:
             return
         self.tooltip.update_idletasks()
@@ -688,7 +813,10 @@ class StatusBar:
         _, top, _, bottom = tb.win_rect(tb.taskbar())
         sw = self.root.winfo_screenwidth()
         x = max(0, min(int(x_root - tw / 2), sw - tw))
-        y = top - th - self.px(8) if top > 0 else bottom + self.px(6)
+        anchor_y = y_root if y_root is not None else top
+        y = anchor_y - th - self.px(12)
+        if y < 0:
+            y = anchor_y + self.px(16)
         self.tooltip.geometry(f"+{x}+{y}")
 
     def hide_tooltip(self):
@@ -1379,6 +1507,18 @@ class StatusBar:
 
     def run(self):
         self.root.mainloop()
+
+
+def rounded_points(x0, y0, x1, y1, r, segs=6):
+    """둥근 사각형 꼭짓점 (Canvas polygon 용)."""
+    import math
+    r = max(1, min(r, (x1 - x0) / 2, (y1 - y0) / 2))
+    pts = []
+    for cx, cy, a0 in ((x1 - r, y0 + r, -math.pi / 2), (x1 - r, y1 - r, 0), (x0 + r, y1 - r, math.pi / 2), (x0 + r, y0 + r, math.pi)):
+        for k in range(segs + 1):
+            a = a0 + (math.pi / 2) * k / segs
+            pts += [cx + r * math.cos(a), cy + r * math.sin(a)]
+    return pts
 
 
 def single_instance():

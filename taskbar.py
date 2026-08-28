@@ -158,5 +158,98 @@ def raise_topmost(hwnd):
     user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
 
 
+def strip_has_content(x0, y0, x1, y1, band):
+    """우리 창 영역을 캡처(우리는 캡처에서 빠지므로 «밑에 뭐가 있는지» 보인다)해서, 왼쪽·오른쪽 band px 열에
+    내용 픽셀(행별 중앙값과 CONTENT_DIFF 이상 다른 것)이 있는지 → (left_hit, right_hit)."""
+    if x1 - x0 < band * 2 + 8:
+        return False, False
+    img = ImageGrab.grab(bbox=(x0, y0, x1, y1)).convert("RGB")
+    w, h = img.size
+    raw = img.tobytes()
+    med = bytearray()
+    for y in range(h):
+        row = raw[y * w * 3:(y + 1) * w * 3]
+        for c in range(3):
+            med.append(sorted(row[c::3])[w // 2])
+    row_bg = Image.frombytes("RGB", (1, h), bytes(med)).resize((w, h), Image.NEAREST)
+    r, g, b = ImageChops.difference(img, row_bg).split()
+    diff = ImageChops.lighter(ImageChops.lighter(r, g), b).point(lambda v: 255 if v > CONTENT_DIFF else 0)
+    cols = diff.resize((w, 1), Image.BOX).tobytes()
+    return any(v > 0 for v in cols[:band]), any(v > 0 for v in cols[-band:])
+
+
+# --- 위젯 버튼의 정확한 오른쪽 경계: UI Automation COM 을 ctypes 로 직접 호출 (PowerShell·외부 프로세스 없음) ---
+_CLSID_CUIAutomation = "{ff48dba4-60ef-4201-aa87-54103eef594e}"
+_IID_IUIAutomation = "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}"
+UIA_AutomationIdPropertyId = 30011
+TreeScope_Descendants = 4
+
+
+class _GUID(ctypes.Structure):
+    _fields_ = [("d1", ctypes.c_uint32), ("d2", ctypes.c_uint16), ("d3", ctypes.c_uint16), ("d4", ctypes.c_ubyte * 8)]
+
+
+class _VARIANT(ctypes.Structure):
+    _fields_ = [("vt", ctypes.c_ushort), ("r1", ctypes.c_ushort), ("r2", ctypes.c_ushort), ("r3", ctypes.c_ushort),
+                ("val", ctypes.c_void_p), ("pad", ctypes.c_void_p)]
+
+
+def _vt(obj, idx, restype, *argtypes):
+    vtbl = ctypes.cast(ctypes.cast(obj, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
+    return ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(vtbl[idx])
+
+
+def _release(obj):
+    try:
+        if obj:
+            _vt(obj, 2, ctypes.c_ulong)(obj)
+    except Exception:
+        pass
+
+
+def widgets_button_right():
+    """작업 표시줄 왼쪽 위젯(날씨) 버튼의 오른쪽 x (화면 좌표). 없거나 실패하면 None. ~20ms.
+    vtable 인덱스: IUIAutomation.ElementFromHandle=6, CreatePropertyCondition=23 ·
+    IUIAutomationElement.FindFirst=5, get_CurrentBoundingRectangle=43 (UIAutomationClient.h 순서)."""
+    ole32, oleaut32 = ctypes.windll.ole32, ctypes.windll.oleaut32
+    uia = root = cond = el = None
+    try:
+        ole32.CoInitialize(None)
+        clsid, iid = _GUID(), _GUID()
+        ole32.CLSIDFromString(_CLSID_CUIAutomation, ctypes.byref(clsid))
+        ole32.CLSIDFromString(_IID_IUIAutomation, ctypes.byref(iid))
+        uia = ctypes.c_void_p()
+        if ole32.CoCreateInstance(ctypes.byref(clsid), None, 1, ctypes.byref(iid), ctypes.byref(uia)) != 0 or not uia:
+            return None
+        root = ctypes.c_void_p()
+        if _vt(uia, 6, ctypes.HRESULT, wintypes.HWND, ctypes.POINTER(ctypes.c_void_p))(uia, taskbar(), ctypes.byref(root)) != 0 or not root:
+            return None
+        v = _VARIANT()
+        v.vt = 8                                                    # VT_BSTR
+        oleaut32.SysAllocString.restype = ctypes.c_void_p
+        v.val = oleaut32.SysAllocString("WidgetsButton")
+        cond = ctypes.c_void_p()
+        _vt(uia, 23, ctypes.HRESULT, ctypes.c_int, _VARIANT, ctypes.POINTER(ctypes.c_void_p))(uia, UIA_AutomationIdPropertyId, v, ctypes.byref(cond))
+        oleaut32.SysFreeString(ctypes.c_void_p(v.val))
+        if not cond:
+            return None
+        el = ctypes.c_void_p()
+        _vt(root, 5, ctypes.HRESULT, ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p))(root, TreeScope_Descendants, cond, ctypes.byref(el))
+        if not el:
+            return None
+        r = wintypes.RECT()
+        if _vt(el, 43, ctypes.HRESULT, ctypes.POINTER(wintypes.RECT))(el, ctypes.byref(r)) != 0:
+            return None
+        left, top, right, bottom = win_rect(taskbar())
+        if r.right <= r.left or r.right - r.left > 600 or not (left <= r.left < right):   # 말이 안 되는 값은 버린다
+            return None
+        return int(r.right)
+    except Exception:
+        return None
+    finally:
+        for o in (el, cond, root, uia):
+            _release(o)
+
+
 def message_box(text, title, flags=0x40):
     user32.MessageBoxW(None, text, title, flags)
