@@ -4,6 +4,7 @@
 
 Windows 작업 표시줄의 빈 공간에 **AI 구독의 사용량(5시간 / 주간 한도)** 을 상시 표시하는 작은 도구입니다.
 설정 페이지를 열지 않아도 지금 얼마나 썼는지, 언제 리셋되는지 한눈에 보입니다.
+macOS 는 **메뉴 막대 글자**로 같은 값을 보여줍니다 → [macOS 메뉴 막대 판](#macos-메뉴-막대-판).
 
 ![screenshot](docs/screenshot.png)
 
@@ -25,8 +26,8 @@ Claude work   5h ▬▬▬░░░░░ 23% ↺12:09   │   Codex work   5h �
 
 | 서비스 | 계정 = 이 파일이 있는 폴더 | 창 | 데이터 원본 |
 |---|---|---|---|
-| **Claude Code** (Claude Pro/Max) | `%USERPROFILE%\.claude\.credentials.json` (또는 `CLAUDE_CONFIG_DIR`) | 5시간 · 7일 · 모델별(Fable 등) | 비공식 API **또는** 공식 모드(상태줄 데이터, 네트워크 0) |
-| **Codex** (ChatGPT Plus/Pro/Team) | `%USERPROFILE%\.codex\auth.json` (또는 `CODEX_HOME`) | 5시간 · 주간 | 비공식 API |
+| **Claude Code** (Claude Pro/Max) | `%USERPROFILE%\.claude\.credentials.json` (또는 `CLAUDE_CONFIG_DIR`) — macOS 는 로그인 키체인의 «Claude Code-credentials» 항목 | 5시간 · 7일 · 모델별(Fable 등) | 비공식 API **또는** 공식 모드(상태줄 데이터, 네트워크 0) |
+| **Codex** (ChatGPT Plus/Pro/Team) | `%USERPROFILE%\.codex\auth.json` (또는 `CODEX_HOME`) — macOS 는 `~/.codex/auth.json` | 5시간 · 주간 | 비공식 API |
 
 계정을 여러 개(예: 회사·개인) 두면 항목이 여러 개가 됩니다. 항목 = 서비스 × 계정.
 
@@ -50,7 +51,7 @@ Claude work   5h ▬▬▬░░░░░ 23% ↺12:09   │   Codex work   5h �
 ## 설치
 
 1. 이 PC 에서 [Claude Code](https://code.claude.com) 나 [Codex CLI](https://developers.openai.com/codex) 로 **한 번 로그인**돼 있어야 합니다 (위 표의 파일이 그때 생깁니다).
-2. [Releases](https://github.com/YeoJeongHun1/ai-status-bar/releases) 에서 `AIStatusBar-<버전>-win64.zip` 을 받아 **원하는 폴더에 풉니다** (예: `%LOCALAPPDATA%\Programs\AIStatusBar`).
+2. [Releases](https://github.com/YeoJeongHun1/ai-status-bar/releases) 에서 `AIStatusBar-<버전>-win64.zip` 을 받아 **원하는 폴더에 풉니다** (예: `%LOCALAPPDATA%\Programs\AIStatusBar`). macOS 는 같은 릴리스의 `AIStatusBar-<버전>-macos-arm64.zip` → [macOS 절](#설치-macos).
    릴리스에 같이 올리는 `.sha256` 파일로 내려받은 zip 을 검증할 수 있습니다: `certutil -hashfile AIStatusBar-<버전>-win64.zip SHA256`.
 3. 푼 폴더의 `AIStatusBar.exe` 를 실행 → 시작 설정 창에서 계정이 잡혔는지 확인하고 「로그인할 때 자동 시작」을 고른 뒤 **시작**.
 
@@ -116,6 +117,104 @@ pythonw ai_status_bar.py
 
 테스트: `pip install pytest` 후 `python -m pytest tests` (리다이렉트 차단·디바운스/백오프·i18n 키 일치·설정 마이그레이션·상태줄 스크립트 필드 선별을 검사합니다).
 exe 다시 만들기: `build.cmd` (PyInstaller, 폴더 빌드 + zip + `.sha256`).
+
+## macOS 메뉴 막대 판
+
+`ai_status_bar_mac.py` / `AI Status Bar.app` — Windows 판과 **같은 기능**을 macOS 메뉴 막대에 맞는 UI 로. 작업 표시줄 빈 공간 대신 **메뉴 막대 글자**이고, 마우스 호버 카드 대신 **클릭 메뉴 상단의 카드**, 설정 창은 네이티브(AppKit) 5탭입니다. 조회·파싱·네트워크 규칙·백오프·i18n·로그는 Windows 판과 같은 파일(`providers/`·`polling.py`·`i18n.py`·`applog.py`)을 그대로 씁니다.
+
+```
+[▬▬░░] 5h 23% · 7d 66%                     항목 하나 (막대 + 숫자)
+work [▬▬░░] 5h 23% · 7d 66% · Fable 45%    라벨 · 모델별 한도 켠 경우
+C [▬▬░░] 23%/66% · X [▬░░░] 4%/12%          항목 여럿 «모든 항목 동시에» (C = Claude, X = Codex)
+●○ work [▬▬░░] 5h 23% · 7d 66%              «클릭 전환 / 자동 슬라이드» — 페이지 점(또는 ⇄)
+5h 23% · 7d 66%      ›                     숫자만 단계 · 접힘(›) 단계
+```
+
+### 특징 (Windows 판과의 대응)
+
+- **막대 + 숫자, 2줄 미니 막대** — 항목마다 숫자 앞에 위 5h · 아래 7d 막대(36×12pt, Pillow 로 그린 2x 투명 PNG 를 `NSTextAttachment` 로 끼움). 색은 초록(<50%) · 노랑(50~79%) · 빨강(80%+), 트랙은 반투명 회색이라 다크·라이트 메뉴 막대 양쪽에서 보임. 값이 없으면 빈 트랙, 조회 전 `…`, 오류 `⚠`, 계정 없음 `AI —`.
+- **리셋 현지시각·서비스·계정·플랜·마지막 조회** — 메뉴 막대 항목은 hover 가 없으므로 **클릭 → 메뉴 맨 위 항목 카드**(서비스 칩 · 라벨 · 창별 미니 막대와 % · 리셋 · 모델별 칩 · 플랜 칩 · 조회/오류/다음 조회). 전환 모드에서 지금 보이는 항목은 카드가 강조되고, 카드를 누르면 그 항목으로 갑니다(Windows 의 페이지 점 클릭).
+- **표시 방식 4종** — 모든 항목 동시에 / 클릭으로 전환(메뉴 막대에선 클릭이 메뉴라 **⌥클릭** 또는 «다음 항목» 메뉴) / 자동 슬라이드(5~3600초) / 하나 고정. 캐러셀 표시는 제목 앞 글리프 `● ○ ○` / `⇄` / 없음.
+- **폭에 따라 3단계 + 넘침 정책** — 막대+숫자 → 숫자만 → `›`. macOS 는 메뉴 막대가 차면 왼쪽 항목부터 숨기므로(Windows 처럼 빈 공간을 잴 수 없음) **우리 항목의 창이 화면 왼쪽 밖(x<0)으로 밀리면** 넘침으로 보고 정책대로 «한 항목씩 자동 슬라이드 / 숫자만 + 오른쪽 잘라 … / 접기 ›» 로 임시 조절합니다(설정은 그대로). 조절 시작 때 알림 1회(같은 알림은 10분에 한 번), 60초마다 원래 단계로 돌아갈 수 있는지 다시 재고 **여유 40pt 이상**일 때만 복귀(경계 진동 방지). 설정 «메뉴 막대 최대 폭(pt)» 을 주면 감지 대신 그 값으로 같은 정책을 돌립니다. 이 감지는 «지금 밀려났나»만 알 뿐 Windows 처럼 빈 공간 px 을 재는 것이 아니라, 미리보기의 «필요한 폭 N pt» 는 우리 항목이 차지할 폭입니다.
+- **스타일** — 계정 라벨 on/off · 막대 «자동(= 막대+숫자) / 막대+숫자 / 숫자만» · 라벨 색(NSColorPanel) · 모델별 한도 표시.
+- **설정 창 = 라이브 미리보기 + 프리셋 6종** — 아래 [설정 창](#설정-창-macos).
+- **80% / 95% 알림 1회**, **색·언어 5종**(시스템 «선호 언어» 자동 감지), **조회 하한 60초·백오프·10초 디바운스·리다이렉트 금지·허용 호스트** — Windows 와 같은 코드.
+- **Dock 아이콘·⌘Tab 없음** — 메뉴 막대에만 존재(`LSUIElement`). 단일 인스턴스(잠금 파일). 크래시는 `error.log`.
+- **해당 없음(맥에 개념이 없음)** — 작업 표시줄 빈 공간 계측·날씨 위젯 경계·`WDA_EXCLUDEFROMCAPTURE`·전체화면 숨김(메뉴 막대는 macOS 가 관리)·시작프로그램 폴더 바로가기(→ LaunchAgent)·SmartScreen(→ Gatekeeper).
+
+### 설치 (macOS)
+
+1. 이 맥에서 [Claude Code](https://code.claude.com) 나 [Codex CLI](https://developers.openai.com/codex) 로 **한 번 로그인**돼 있어야 합니다 (Claude 는 키체인 항목, Codex 는 `~/.codex/auth.json` 이 그때 생깁니다).
+2. **번들** (**Apple Silicon · macOS 26 이상** — 번들에 들어간 Homebrew Python 3.14 의 최소 요구; Intel 이나 그 이하 macOS 는 아래 «소스» 로): [Releases](https://github.com/YeoJeongHun1/ai-status-bar/releases) 의 `AIStatusBar-<버전>-macos-arm64.zip` 을 받아 **Finder 에서 더블클릭**(아카이브 유틸리티) 또는 `ditto -x -k AIStatusBar-<버전>-macos-arm64.zip .` 으로 풀고 `AI Status Bar.app` 을 `~/Applications` 에 넣습니다 (`unzip` 도 됩니다 — zip 에 AppleDouble `._*` 파일을 넣지 않아 어느 쪽으로 풀어도 서명이 유지됩니다). 검증: `shasum -a 256 -c AIStatusBar-<버전>-macos-arm64.zip.sha256`. 번들은 Python 설치가 필요 없습니다(자체 파이썬 포함).
+   **소스**: `git clone https://github.com/YeoJeongHun1/ai-status-bar && cd ai-status-bar && zsh mac/install.sh` — `dist/AI Status Bar.app` 이 있으면 그것을 `~/Applications` 에 복사하고, 없으면 `~/Library/Application Support/AIStatusBar/venv` 에 `requirements-mac.txt`(버전 고정) 를 설치해 소스로 돕니다(`--build` 로 번들을 직접 만들어 설치, `--source` 로 소스 강제). Python 3.11+ 필요(Homebrew `python3`; `/usr/bin/python3` 은 3.9 라 안 됨).
+3. 처음 실행하면 **시작 설정 창**이 뜹니다 → 계정이 잡혔는지 확인, «로그인할 때 자동 시작» 을 고른 뒤 **시작**. `install.sh` 는 LaunchAgent(`~/Library/LaunchAgents/com.yeojeonghun.ai-status-bar.plist`, RunAtLoad·KeepAlive 없음)를 등록하고 바로 띄웁니다.
+
+- 프로그램은 **둔 자리에서 그대로** 돕니다(번들은 `~/Applications`, 소스는 클론 폴더). 자동 시작은 LaunchAgent plist 하나뿐. sudo·시스템 폴더 없음.
+- **제거** — 순서가 중요합니다(Windows 와 같은 이유): ① 공식 모드를 썼다면 설정 창의 «상태줄 연결 해제» 또는 `--unlink-statusline` ② «로그인할 때 자동 시작» 끄기(또는 `--no-autostart`) ③ `zsh mac/uninstall.sh`(①②③ 를 순서대로 하고 번들을 지움) 또는 번들·폴더 삭제. 남는 것은 `~/Library/Application Support/AIStatusBar/`(설정·venv·공식 모드 파일)와 `~/Library/Logs/AIStatusBar/` 뿐이며 지워도 됩니다.
+
+### Gatekeeper 가 막을 때
+
+코드 서명(Apple Developer ID, 연 $99)이 없는 개인 오픈소스라 **처음 보는 앱** 취급을 받습니다. `build_mac.sh` 는 ad-hoc 서명만 합니다(`spctl` 은 rejected).
+
+- 내려받은 zip 을 풀어 열면 «Apple 이 악성 소프트웨어가 없는지 확인할 수 없습니다» 가 뜨고 열리지 않습니다 → ① **시스템 설정 › 개인정보 보호 및 보안** 아래쪽의 «"AI Status Bar" 은(는) 차단되었습니다 … **그래도 열기**» 를 누른 뒤 다시 엽니다 (macOS 15 Sequoia 부터는 **우클릭 → 열기 가 통하지 않습니다**; 14 이하에서는 우클릭 → 열기 한 번으로 됩니다). ② 터미널이면 `xattr -d com.apple.quarantine "AI Status Bar.app"` 뒤 실행.
+- 소스로 설치(`install.sh`)하거나 직접 빌드(`build_mac.sh`)한 앱에는 격리 속성이 없어 경고 없이 열립니다 — 못 믿겠으면 이 길을 쓰세요. 코드 전부가 이 저장소에 있습니다.
+- 근본 해결은 Developer ID 서명 + 공증뿐이라, 사용자가 늘면 [GitHub Sponsors](https://github.com/sponsors/YeoJeongHun1) 로 마련할 계획입니다.
+
+### 사용 (macOS)
+
+| 동작 | 결과 |
+|---|---|
+| 클릭 | 메뉴 — 맨 위 **항목 카드**(Windows 의 호버 카드·상세 팝업) · 설정… · 다음 항목(전환 모드) · 지금 새로고침 · 다시 탐색 · 각 서비스 사용량 페이지 · 표시 방식 · 막대 · 라벨 · 모델별 한도 · 데이터 원본(+상태줄 연결) · 로그인할 때 자동 시작 · 언어 · 정보 · 오류 로그 폴더 · 사용 방법 · 종료 |
+| ⌥클릭 | Windows 왼쪽 클릭: «클릭으로 전환·자동 슬라이드» 면 다음 항목, 그 외엔 새로고침 |
+| ⌘클릭 | 새로고침 |
+| ⇧클릭 | 설정 창 |
+| 카드 클릭 | 전환 모드면 그 항목으로(페이지 점), 아니면 설정 «항목» 탭 |
+
+«새로고침» 은 연타해도 **10초에 한 번**만 실제 조회합니다. 메뉴는 열 때마다 최신 값으로 다시 만듭니다.
+
+### 설정 창 (macOS)
+
+메뉴 › **설정…** (⇧클릭, `--setup` — 이미 떠 있으면 그 인스턴스의 창을 엽니다). 네이티브 AppKit 창, 맨 위에 **라이브 미리보기**(현재 폼 값으로 메뉴 막대 세그먼트를 그대로 그린 이미지 — 값이 없으면 예시값, «필요한 폭 N pt · 지금 단계»).
+
+- **항목** — 서비스×계정 폴더 목록: 표시 on/off · 라벨 편집 · 창(5h/7d) · 순서 ▲▼ · 삭제 · 연결 상태 · «상태줄 연결 설치/해제». «다시 탐색»(키체인 항목·`CLAUDE_CONFIG_DIR`·`CODEX_HOME`·홈의 `.claude*`/`.codex*`), «폴더 추가…»(서비스 선택 → 숨김 폴더가 보이는 NSOpenPanel), «계정이 안 보여요?»(macOS 키체인 설명 포함).
+- **표시 · 스타일** — 프리셋 카드 6종(기본 / 미니멀 / 클릭 전환 / 풀 정보 / 슬라이드 / 고정 — 미리보기 그림 포함, 누르면 한 번에 적용) · 표시 방식 4종 + 슬라이드 주기(5~3600) + 고정할 항목 · 위치(Windows 키 보존) · 넘침 정책 · 전환 표시 · **메뉴 막대 최대 폭(pt, 0 = 자동 감지)** · 계정 라벨 · 모델별 한도 · 막대 «자동/막대+숫자/숫자만» · 라벨 색(고르기… / 기본).
+- **데이터** — 비공식 API / 공식 모드, 공식 데이터 없는 항목 숨기기, 계정 연결 상태(플랜·토큰 만료·마지막 조회·오류·다음 조회·상태줄 연결됨), «연결 다시 확인».
+- **시작 · 언어** — 로그인할 때 자동 시작(LaunchAgent), 언어(시스템 기본 + 5개).
+- **정보** — 버전, 동작 방식 요약(읽는 것 / 키체인 / 보내는 것 / 저장하는 것), README·릴리스·후원 링크, «계정이 안 보여요?», «오류 로그 폴더 열기», 약관 고지, 클릭 조합 안내, 제거 안내, Gatekeeper 안내, 상표 고지.
+- **저장** — 적용하고 창은 그대로(«저장됨 ✓»). 저장하지 않고 닫으면 저장/버리기/취소. 언어를 바꾸면 창을 새 언어로 다시 엽니다. 미리보기는 창 안에서만 쓰이고, 조회는 항상 **저장된 설정**으로만 나갑니다.
+
+명령줄: `--setup` 설정 창 · `--autostart` / `--no-autostart` LaunchAgent 등록(+즉시 기동) / 해제(+그 잡이 띄운 앱 종료) · `--unlink-statusline`. `AI_STATUS_BAR_POLL_SEC` 도 같습니다(60초 하한).
+
+### 소스로 실행 (macOS)
+
+Python 3.11 이상 (Homebrew).
+
+```sh
+python3 -m venv .venv && .venv/bin/pip install -r requirements-mac.txt
+.venv/bin/python ai_status_bar_mac.py
+```
+
+테스트: `pip install pytest` 후 `python -m pytest tests --ignore=tests/test_settings.py`(Windows 판 설정 테스트는 tkinter 필요). macOS 전용: `test_mac_credentials.py`(`security` 를 흉내 낸 키체인 파싱·거부·다이얼로그 대기·폴백), `test_mac_title.py`·`test_mac_bars.py`(제목·막대 PNG 픽셀), `test_mac_settings.py`·`test_mac_settings_model.py`(설정 스키마·폼·프리셋·행 조작·넘침 상태 기계), `test_mac_window_smoke.py`(설정 창을 실제로 만들어 프리셋 → 미리보기 → 저장 경로), `test_mac_app_regressions.py`(UI 경로에서 키체인 `-w` 0회 · 메뉴 토글 연타 디바운스 · 언어 전환), `test_statusline_sh.py`(zsh 스크립트 실제 실행). 번들 다시 만들기: `zsh build_mac.sh`(py2app 0.28.10 고정, `dist/AI Status Bar.app` + `AIStatusBar-<버전>-macos-<arch>.zip` + `.sha256`, `app.ico` → `.icns`; Info.plist 의 빌드 경로 제거 · `.pyc` 소스 경로 중립화 · `ditto --sequesterRsrc` · `unzip` 후 `codesign --verify --deep --strict` 실측까지 스크립트가 합니다). 최소 macOS 는 빌드에 쓴 파이썬의 `minos` 를 그대로 적습니다.
+
+### 어떻게 동작하나 (macOS 에서 다른 것만)
+
+Windows 절의 네트워크 규칙·Claude Code·Codex 요청·응답은 **그대로**입니다. 다른 것:
+
+| | 읽는 곳 | 방법 |
+|---|---|---|
+| Claude Code 토큰 | 로그인 키체인의 «Claude Code-credentials» 항목 (macOS 의 Claude Code 는 `.credentials.json` 을 만들지 않습니다) | `/usr/bin/security find-generic-password -s "Claude Code-credentials" -w` — Apple 기본 도구, 추가 의존성 없음. 폴더에 `.credentials.json` 이 있으면 그 파일을 먼저 씁니다 |
+| Claude Code 라벨 | `~/.claude.json` 의 `oauthAccount.emailAddress` | Windows 와 같음 |
+| Codex | `~/.codex/auth.json` (또는 `CODEX_HOME`) | Windows 와 같음 |
+
+키체인의 비밀 값을 처음 읽을 때 macOS 가 **«허용 / 항상 허용»** 을 물을 수 있습니다. 그동안 카드와 설정 창에 «키체인 접근 허용 필요» 가 보이고 앱은 죽지 않습니다 — «항상 허용» 을 누르면 다음 조회부터 됩니다. 계정 존재 확인(«다시 탐색»)은 항목의 메타데이터만 보므로 다이얼로그가 뜨지 않습니다. 키체인 항목은 사용자당 하나라 **기본 폴더(`~/.claude` 또는 `CLAUDE_CONFIG_DIR`)에만** 대응합니다 — 계정 여러 개는 폴더별 `.credentials.json` 이 있을 때만. 토큰은 요청 헤더에만 쓰고 갱신·저장·로그하지 않습니다.
+
+**저장하는 것** — 설정 `~/Library/Application Support/AIStatusBar/settings.json`(Windows 와 같은 스키마 + `max_width_pt`; 파일을 옮겨도 읽힘) · 오류 로그 `~/Library/Logs/AIStatusBar/error.log`(같은 마스킹 — 화면의 오류 문구도 같은 마스킹을 거칩니다; `launchd.log` 는 stdout/stderr) · 공식 모드 파일 `~/Library/Application Support/AIStatusBar/official/<key>.json` · 자동 시작 plist(현재 셸에 `CLAUDE_CONFIG_DIR`/`CODEX_HOME` 이 있으면 `EnvironmentVariables` 로 함께 기록) · 잠금 파일 `app.lock` · rumps 가 만드는 빈 폴더 `~/Library/Application Support/AI Status Bar/`. 키체인의 비밀 값(`security -w`)은 **폴링 스레드에서만** 읽고 메뉴·설정 창은 그 결과의 캐시만 봅니다 — 거부되면 다른 오류처럼 지수 백오프해 «허용» 다이얼로그를 5분마다 다시 띄우지 않습니다.
+
+**띄우는 외부 프로세스** — `/usr/bin/security`(키체인 읽기), `/bin/launchctl`(자동 시작 켜고 끌 때), `/usr/bin/open`(로그 폴더·링크), 알림 폴백 때 `/usr/bin/osascript`. 공식 모드를 연결하면 *Claude Code 가* 상태줄을 그릴 때마다 `/bin/zsh "<앱>/statusline_export.sh"` 를 실행합니다(아래).
+
+### 공식 모드 (macOS)
+
+Windows 의 `statusline_export.ps1` 과 같은 규약의 `statusline_export.sh`(zsh): `rate_limits`(5h/7d 사용률·리셋)와 모델명만 `official/<key>.json` 에 PID 임시파일을 거쳐 저장하고, 원래 상태줄 명령이 있었으면 그 JSON 을 그대로 `/bin/sh -c <원래 명령>` 에 넘깁니다(명령 문자열은 인자 하나로 전달, 보간 없음). 없었으면 `모델 | 5h xx% | 7d xx%`. JSON 처리는 번들의 자체 파이썬(`AI Status Bar.app/Contents/MacOS/python`) → 소스 설치의 venv 파이썬 → PATH 의 `python3` 순으로 찾습니다(번들 설치엔 Python 설치가 필요 없음; 셋 다 없으면 아무것도 저장·출력하지 않음). `<key>` 는 폴더 절대경로(끝 `/` 제거)의 SHA-1 앞 12자 — `providers/claude_code.py` 와 같습니다. 설정 창 «항목» 탭(또는 메뉴 «데이터 원본»)의 «상태줄 연결 설치» 가 확인창 뒤 `~/.claude/settings.json` 을 `.bak-aistatusbar` 로 백업하고 `statusLine` 을 바꿉니다. 해제는 «상태줄 연결 해제» 또는 `--unlink-statusline`. 번들 설치면 스크립트는 `AI Status Bar.app/Contents/Resources/statusline_export.sh` 입니다 — 번들을 옮기면 연결을 다시 하세요.
 
 ## 어떻게 동작하나 — 투명하게
 
@@ -232,7 +331,7 @@ User-Agent: ai-status-bar/<버전>
 $env:CLAUDE_CONFIG_DIR = "$HOME\.claude-b"; claude        # Claude Code 두 번째 계정
 $env:CODEX_HOME = "$HOME\.codex-b"; codex login            # Codex 두 번째 계정
 ```
-그다음 설정 창에서 «다시 탐색». macOS 는 Claude 토큰을 키체인에 저장해 파일이 없습니다 — 이 앱은 Windows 전용입니다.
+그다음 설정 창에서 «다시 탐색». macOS 는 Claude 토큰을 키체인에 저장해 파일이 없습니다 — macOS 판은 키체인에서 읽습니다([아래](#macos-메뉴-막대-판)). 키체인 항목은 사용자당 하나라 macOS 에서 Claude 계정 여러 개는 `CLAUDE_CONFIG_DIR` 폴더에 `.credentials.json` 이 있는 경우(Linux 식 설정)만 됩니다.
 
 ## 알아둘 점
 
@@ -261,6 +360,7 @@ MIT
 > **An independent open-source project, unaffiliated with Anthropic, OpenAI, GitHub or any other company.** Claude, Anthropic, OpenAI, ChatGPT and Codex are trademarks of their respective owners; names are shown only to identify the service, no logos are used.
 
 A tiny Windows utility that shows your **AI subscription usage (5-hour / weekly limits)** in the empty area of the taskbar — always visible, no settings page to open.
+On macOS the same numbers live in the **menu bar** → [macOS menu bar version](#macos-menu-bar-version).
 
 ## Read this first — terms and risk
 
@@ -272,8 +372,8 @@ A tiny Windows utility that shows your **AI subscription usage (5-hour / weekly 
 
 | Service | Account = the folder containing | Windows | Data source |
 |---|---|---|---|
-| **Claude Code** (Claude Pro/Max) | `%USERPROFILE%\.claude\.credentials.json` (or `CLAUDE_CONFIG_DIR`) | 5-hour · 7-day · per-model | unofficial API **or** official mode (status-line data, zero network) |
-| **Codex** (ChatGPT Plus/Pro/Team) | `%USERPROFILE%\.codex\auth.json` (or `CODEX_HOME`) | 5-hour · weekly | unofficial API |
+| **Claude Code** (Claude Pro/Max) | `%USERPROFILE%\.claude\.credentials.json` (or `CLAUDE_CONFIG_DIR`) — on macOS the «Claude Code-credentials» item in the login Keychain | 5-hour · 7-day · per-model | unofficial API **or** official mode (status-line data, zero network) |
+| **Codex** (ChatGPT Plus/Pro/Team) | `%USERPROFILE%\.codex\auth.json` (or `CODEX_HOME`) — `~/.codex/auth.json` on macOS | 5-hour · weekly | unofficial API |
 
 Entry = service × account; several accounts per service are supported.
 
@@ -295,7 +395,7 @@ Entry = service × account; several accounts per service are supported.
 ## Install
 
 1. Be logged in once with [Claude Code](https://code.claude.com) and/or [Codex CLI](https://developers.openai.com/codex) on this PC (that is what creates the files in the table above).
-2. Download `AIStatusBar-<ver>-win64.zip` from [Releases](https://github.com/YeoJeongHun1/ai-status-bar/releases) and unzip it anywhere (e.g. `%LOCALAPPDATA%\Programs\AIStatusBar`). Verify with the `.sha256` file attached to the release: `certutil -hashfile AIStatusBar-<ver>-win64.zip SHA256`.
+2. Download `AIStatusBar-<ver>-win64.zip` from [Releases](https://github.com/YeoJeongHun1/ai-status-bar/releases) and unzip it anywhere (e.g. `%LOCALAPPDATA%\Programs\AIStatusBar`). On macOS take `AIStatusBar-<ver>-macos-arm64.zip` from the same release → [macOS section](#install-macos). Verify with the `.sha256` file attached to the release: `certutil -hashfile AIStatusBar-<ver>-win64.zip SHA256`.
 3. Run `AIStatusBar.exe` → check that your accounts were found → tick "run at login" if you want → **Start**.
 
 **Remove — order matters**: ① if you used official mode, click «Remove status line link» in Settings (or run `AIStatusBar.exe --unlink-statusline`) — otherwise Claude Code keeps trying to run a script that no longer exists every time it draws its status line; ② turn off run-at-login (or `--no-autostart`); ③ delete the folder. What remains is `%LOCALAPPDATA%\AIStatusBar\` (settings, error log, official-mode files), which you may delete too.
@@ -340,6 +440,104 @@ pythonw ai_status_bar.py
 
 Tests: `pip install pytest` then `python -m pytest tests` (redirect blocking, debounce/backoff, i18n key parity, settings migration, status-line script field filtering). Rebuild the exe with `build.cmd` (PyInstaller, one-folder build + zip + `.sha256`).
 
+## macOS menu bar version
+
+`ai_status_bar_mac.py` / `AI Status Bar.app` — the **same features** as the Windows version with a UI that fits the macOS menu bar: **menu bar text** instead of the taskbar gap, **entry cards at the top of the click menu** instead of hover cards, and a native (AppKit) five-tab settings window. Fetching, parsing, network rules, backoff, i18n and logging are the very same files as on Windows (`providers/`, `polling.py`, `i18n.py`, `applog.py`).
+
+```
+[▬▬░░] 5h 23% · 7d 66%                     one entry (bars + numbers)
+work [▬▬░░] 5h 23% · 7d 66% · Fable 45%    with label and per-model caps
+C [▬▬░░] 23%/66% · X [▬░░░] 4%/12%          several entries, «all at once» (C = Claude, X = Codex)
+●○ work [▬▬░░] 5h 23% · 7d 66%              «switch on click / auto slide» — page dots (or ⇄)
+5h 23% · 7d 66%      ›                     numbers-only tier · collapsed (›) tier
+```
+
+### Features (mapped to the Windows version)
+
+- **Bars + numbers, two-line mini bars** — 5h above, 7d below (36×12 pt, a 2x transparent PNG drawn with Pillow, embedded as an `NSTextAttachment`). Green (<50%) · yellow (50–79%) · red (80%+); the track is translucent grey so it shows on both dark and light menu bars. Empty track without a value, `…` while loading, `⚠` on error, `AI —` with no accounts.
+- **Local reset time · service · account · plan · last fetch** — menu bar items have no hover, so **click → entry cards at the top of the menu** (service chip · label · mini bar and % per window · reset · per-model chips · plan chip · fetched/error/next check). In switch modes the visible entry's card is highlighted and clicking a card jumps to it (Windows' page-dot click).
+- **Four display modes** — all at once / switch on click (a click opens the menu here, so it is **⌥-click** or the «Next entry» item) / auto slide (5–3600 s) / pin one. Carousel indicator as a glyph before the title: `● ○ ○` / `⇄` / none.
+- **Three tiers + overflow policy** — bars+numbers → numbers → `›`. macOS hides menu bar items from the left when the bar is full (free space cannot be measured like on Windows), so the app treats **its item being pushed off the left edge (window x < 0)** as overflow and applies the policy — auto slide one entry at a time / numbers only with the right clipped (…) / collapse to › — temporarily (settings untouched). One notification when it kicks in (at most once per 10 minutes); every 60 s it re-tries the original tier and reverts only with **≥ 40 pt of slack** (no flapping). Set «max menu bar width (pt)» in Settings to use a fixed width instead of detection. This detection only knows *whether* the item was pushed out, not how many px are free; the preview's «needs N pt» is the width the item itself takes.
+- **Style** — account label on/off · bars «auto (= bars + numbers) / bars + numbers / numbers only» · label color (NSColorPanel) · per-model caps.
+- **Settings = live preview + six presets** — see [Settings window](#settings-window-macos).
+- **80% / 95% notification once**, **colors and five languages** (auto-detected from the system's preferred language), **60 s poll floor · backoff · 10 s debounce · no redirects · host allow-list** — the same code as Windows.
+- **No Dock icon, no ⌘-Tab** — menu bar only (`LSUIElement`). Single instance (lock file). Crashes go to `error.log`.
+- **Not applicable (no macOS counterpart)** — taskbar free-space measurement, weather-widget edge, `WDA_EXCLUDEFROMCAPTURE`, hiding during fullscreen apps (macOS manages the menu bar), Startup-folder shortcut (→ LaunchAgent), SmartScreen (→ Gatekeeper).
+
+### Install (macOS)
+
+1. Be logged in once with [Claude Code](https://code.claude.com) and/or [Codex CLI](https://developers.openai.com/codex) on this Mac (that creates the Keychain item / `~/.codex/auth.json`).
+2. **Bundle** (**Apple Silicon · macOS 26 or later** — the minimum of the Homebrew Python 3.14 inside the bundle; Intel Macs or older macOS: use «Source» below): download `AIStatusBar-<ver>-macos-arm64.zip` from [Releases](https://github.com/YeoJeongHun1/ai-status-bar/releases), extract it by **double-clicking in Finder** (Archive Utility) or with `ditto -x -k AIStatusBar-<ver>-macos-arm64.zip .`, and put `AI Status Bar.app` into `~/Applications` (`unzip` works too — the zip carries no AppleDouble `._*` files, so the signature survives either way). Verify: `shasum -a 256 -c AIStatusBar-<ver>-macos-arm64.zip.sha256`. The bundle needs no Python installation (it ships its own).
+   **Source**: `git clone https://github.com/YeoJeongHun1/ai-status-bar && cd ai-status-bar && zsh mac/install.sh` — uses `dist/AI Status Bar.app` if present (copied to `~/Applications`), otherwise installs the pinned `requirements-mac.txt` into `~/Library/Application Support/AIStatusBar/venv` and runs from source (`--build` builds the bundle first, `--source` forces source). Python 3.11+ (Homebrew `python3`; `/usr/bin/python3` is 3.9).
+3. The first launch opens the **first-run setup** window → check that your accounts were found → tick «Start at login» → **Start**. `install.sh` registers the LaunchAgent (`~/Library/LaunchAgents/com.yeojeonghun.ai-status-bar.plist`, RunAtLoad, no KeepAlive) and starts the app right away.
+
+- The app runs **from where you put it** (`~/Applications` for the bundle, the clone folder for source); autostart is one LaunchAgent plist. No sudo, no system folders.
+- **Remove — order matters** (same reason as on Windows): ① if you used official mode, «Remove status line link» in Settings (or `--unlink-statusline`) ② turn off «Start at login» (or `--no-autostart`) ③ `zsh mac/uninstall.sh` (does ①②③ and deletes the bundle) or delete the app/folder. What remains is `~/Library/Application Support/AIStatusBar/` (settings, venv, official-mode files) and `~/Library/Logs/AIStatusBar/`, which you may delete too.
+
+### When Gatekeeper blocks it
+
+There is no Apple Developer ID signature ($99/year) — `build_mac.sh` signs ad-hoc only (`spctl` says rejected) — so the app is treated as **unknown**.
+
+- Opening the app from a downloaded zip shows «Apple could not verify … is free of malware» and it does not open → ① **System Settings › Privacy & Security**, scroll down to «"AI Status Bar" was blocked … **Open Anyway**», then open it again (since macOS 15 Sequoia **right-click → Open no longer works**; on 14 and earlier right-click → Open once is enough). ② From a terminal: `xattr -d com.apple.quarantine "AI Status Bar.app"` and launch.
+- An app installed from source (`install.sh`) or built yourself (`build_mac.sh`) carries no quarantine flag and opens without a warning — use that route if in doubt; all the code is in this repository.
+- The real fix is Developer ID signing + notarization; if the user base grows it will be funded via [GitHub Sponsors](https://github.com/sponsors/YeoJeongHun1).
+
+### Usage (macOS)
+
+| Action | Result |
+|---|---|
+| Click | menu — **entry cards** on top (Windows' hover card / detail popup) · Settings… · Next entry (switch modes) · Refresh now · Rescan · usage page per service · Display mode · Bars · Label · Per-model caps · Data source (+ status-line link) · Start at login · Language · About · Open error-log folder · README · Quit |
+| ⌥-click | Windows' left click: next entry in «switch on click / auto slide», otherwise refresh |
+| ⌘-click | refresh |
+| ⇧-click | Settings window |
+| Click a card | jump to that entry in switch modes (page dot), otherwise Settings › Entries |
+
+«Refresh» performs at most one real fetch per 10 seconds. The menu is rebuilt with fresh values every time it opens.
+
+### Settings window (macOS)
+
+Menu › **Settings…** (⇧-click, or `--setup` — if the app is already running it opens that instance's window). Native AppKit window with a **live preview** on top (the menu bar segment drawn from the current form values — sample values when there is no data — plus «needs N pt · current tier»).
+
+- **Entries** — service × account folder list: on/off · label · windows (5h/7d) · order ▲▼ · delete · connection status · «Install / Remove status line link». «Rescan» (Keychain item, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `.claude*` / `.codex*` in your home), «Add folder…» (pick a service → NSOpenPanel with hidden folders visible), «Account missing?» (includes the macOS Keychain explanation).
+- **Display & style** — six preset cards (Default / Minimal / Click to switch / Full info / Slide / Pinned, with preview images; one click applies the set) · four display modes + slide interval (5–3600) + pinned entry · placement (Windows key preserved) · overflow policy · switch indicator · **max menu bar width (pt, 0 = auto-detect)** · account label · per-model caps · bars «auto / bars + numbers / numbers only» · label color (Pick… / Default).
+- **Data** — unofficial API / official mode, hide entries without official data, account connection status (plan, token expiry, last fetch, error, next check, status line linked), «Re-check connection».
+- **Startup & language** — start at login (LaunchAgent), language (system default + 5).
+- **About** — version, how it works (reads / Keychain / sends / stores), README · Releases · Sponsors links, «Account missing?», «Open error-log folder», terms notice, click-modifier hint, removal guide, Gatekeeper hint, trademark notice.
+- **Save** applies and keeps the window open («Saved ✓»); closing with unsaved changes asks save / discard / cancel. Changing the language reopens the window in the new language. The preview is used only inside the window — polling always uses the **saved** settings.
+
+Command line: `--setup` settings window · `--autostart` / `--no-autostart` register the LaunchAgent (+ start now) / remove it (+ quit the app it started) · `--unlink-statusline`. `AI_STATUS_BAR_POLL_SEC` works the same (60 s floor).
+
+### Run from source (macOS)
+
+Python 3.11+ (Homebrew).
+
+```sh
+python3 -m venv .venv && .venv/bin/pip install -r requirements-mac.txt
+.venv/bin/python ai_status_bar_mac.py
+```
+
+Tests: `pip install pytest` then `python -m pytest tests --ignore=tests/test_settings.py` (the Windows settings test needs tkinter). macOS-specific: `test_mac_credentials.py` (Keychain parsing, denial, pending dialog, fallbacks with a mocked `security`), `test_mac_title.py` · `test_mac_bars.py` (title assembly, bar PNG pixels), `test_mac_settings.py` · `test_mac_settings_model.py` (schema, form, presets, row ops, overflow state machine), `test_mac_window_smoke.py` (builds the real settings window and drives preset → preview → save), `test_mac_app_regressions.py` (no Keychain `-w` on UI paths · debounced menu toggles · language switch), `test_statusline_sh.py` (runs the real zsh script). Rebuild the bundle: `zsh build_mac.sh` (py2app 0.28.10 pinned → `dist/AI Status Bar.app` + `AIStatusBar-<ver>-macos-<arch>.zip` + `.sha256`, `app.ico` → `.icns`; the script also strips the build path from Info.plist, neutralizes source paths in `.pyc`, zips with `ditto --sequesterRsrc` and verifies `codesign --verify --deep --strict` after `unzip`). The minimum macOS is taken from the `minos` of the Python used for the build.
+
+### How it works (only what differs on macOS)
+
+The network rules and the Claude Code / Codex requests and responses in the Windows section apply **unchanged**. What differs:
+
+| | Read from | How |
+|---|---|---|
+| Claude Code token | the «Claude Code-credentials» item in your login Keychain (Claude Code on macOS does not write `.credentials.json`) | `/usr/bin/security find-generic-password -s "Claude Code-credentials" -w` — Apple's built-in tool, no extra dependency. If the folder does contain `.credentials.json`, that file wins |
+| Claude Code label | `oauthAccount.emailAddress` in `~/.claude.json` | same as Windows |
+| Codex | `~/.codex/auth.json` (or `CODEX_HOME`) | same as Windows |
+
+The first time the secret is read macOS may ask **«Allow / Always Allow»**. Meanwhile the cards and the settings window show «Keychain access needed» and the app keeps running; click «Always Allow» and the next check succeeds. Discovery («Rescan») only looks at the item's metadata, so it never triggers the dialog. One Keychain item per user → mapped **only to the default folder** (`~/.claude` or `CLAUDE_CONFIG_DIR`); several accounts only with per-folder `.credentials.json` files. As on Windows the token goes into the request header only — never refreshed, stored or logged.
+
+**What is stored** — settings `~/Library/Application Support/AIStatusBar/settings.json` (Windows schema + `max_width_pt`; portable) · error log `~/Library/Logs/AIStatusBar/error.log` (same masking — on-screen error text goes through the same mask; `launchd.log` is stdout/stderr) · official-mode file `~/Library/Application Support/AIStatusBar/official/<key>.json` · the autostart plist (with `EnvironmentVariables` if `CLAUDE_CONFIG_DIR`/`CODEX_HOME` are set in the shell that enables it) · the lock file `app.lock` · an empty folder `~/Library/Application Support/AI Status Bar/` created by rumps. The Keychain secret (`security -w`) is read **only on the polling thread**; the menu and the settings window use a cached result — a denial backs off exponentially like any other error, so the «Allow» dialog is not re-raised every 5 minutes.
+
+**External processes it launches** — `/usr/bin/security` (Keychain read), `/bin/launchctl` (toggling autostart), `/usr/bin/open` (log folder, links), `/usr/bin/osascript` only as a notification fallback. With the official-mode link installed, *Claude Code* runs `/bin/zsh "<app>/statusline_export.sh"` every time it draws its status line (below).
+
+### Official mode (macOS)
+
+`statusline_export.sh` (zsh) follows the same contract as `statusline_export.ps1`: saves **only** `rate_limits` (5h/7d percentage, reset) and the model name to `official/<key>.json` through a per-PID temp file, then pipes the unchanged JSON to your original status-line command via `/bin/sh -c <command>` (the command is passed as one argument, never interpolated), or prints `model | 5h xx% | 7d xx%`. JSON is handled by the bundle's own Python (`AI Status Bar.app/Contents/MacOS/python`), else the source install's venv Python, else `python3` on PATH (the bundle needs no Python installation; with none of the three, nothing is saved or printed). `<key>` = first 12 hex chars of SHA-1 of the absolute folder path without a trailing `/` — identical to `providers/claude_code.py`. «Install status line link» in Settings › Entries (or the menu's Data source submenu) backs up `~/.claude/settings.json` to `.bak-aistatusbar` and rewrites `statusLine` after a confirmation; remove via «Remove status line link» or `--unlink-statusline`. With the bundle the script lives at `AI Status Bar.app/Contents/Resources/statusline_export.sh` — re-link if you move the bundle.
+
 ## How it works — full transparency
 
 Everything the program reads from disk, sends, receives and stores. The only network code is `get_json()` in `providers/http.py`; each service file in `providers/` calls it once per fetch.
@@ -380,7 +578,7 @@ Instead of the unofficial API, use only the `rate_limits` that Claude Code's sta
 
 ## My account is not in the list
 
-An "account" is the login file the CLI writes — Claude Code: `.credentials.json` (missing if you never logged in on this PC, if you switch accounts with `/login` in one folder, if you use `claude setup-token` + `CLAUDE_CODE_OAUTH_TOKEN` — never written to a file, not supported — or if your folder is elsewhere via `CLAUDE_CONFIG_DIR`); Codex: `auth.json` (missing if you never ran `codex login`, if you use an API key — no usage windows, not supported — or if your folder is elsewhere via `CODEX_HOME`). Use «Add folder…» for custom folders. For several accounts at once give each its own folder: `$env:CLAUDE_CONFIG_DIR = "$HOME\.claude-b"; claude` / `$env:CODEX_HOME = "$HOME\.codex-b"; codex login`, then «Rescan». Windows-only (macOS keeps the Claude token in the Keychain).
+An "account" is the login file the CLI writes — Claude Code: `.credentials.json` (missing if you never logged in on this PC, if you switch accounts with `/login` in one folder, if you use `claude setup-token` + `CLAUDE_CODE_OAUTH_TOKEN` — never written to a file, not supported — or if your folder is elsewhere via `CLAUDE_CONFIG_DIR`); Codex: `auth.json` (missing if you never ran `codex login`, if you use an API key — no usage windows, not supported — or if your folder is elsewhere via `CODEX_HOME`). Use «Add folder…» for custom folders. For several accounts at once give each its own folder: `$env:CLAUDE_CONFIG_DIR = "$HOME\.claude-b"; claude` / `$env:CODEX_HOME = "$HOME\.codex-b"; codex login`, then «Rescan». On macOS the Claude token is in the Keychain, not a file — the macOS version reads it from there ([below](#macos-menu-bar-version)); since there is one Keychain item per user, several Claude accounts on macOS work only with a per-folder `.credentials.json` (Linux-style setup).
 
 ## Notes
 
