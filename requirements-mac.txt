@@ -2,3 +2,6 @@
 pillow>=10
 rumps>=0.4
 pyobjc-framework-Cocoa>=10
+pyobjc-framework-Quartz>=10
+# build_mac.sh (.app 번들):
+# py2app

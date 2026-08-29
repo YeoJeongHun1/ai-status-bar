@@ -34,9 +34,12 @@ def is_loaded():
 
 
 def plist_dict(python=None, script=None):
+    args = [python or PYTHON]
+    if script is not None or ENTRY_SCRIPT is not None:
+        args.append(script or ENTRY_SCRIPT)
     return {
         "Label": LAUNCH_LABEL,
-        "ProgramArguments": [python or PYTHON, script or ENTRY_SCRIPT],
+        "ProgramArguments": args,
         "WorkingDirectory": ROOT_DIR,
         "RunAtLoad": True,
         "KeepAlive": False,

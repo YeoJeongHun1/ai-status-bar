@@ -11,7 +11,7 @@ AI Status Bar — macOS 메뉴 막대 판. Claude Code · Codex 구독의 5시�
 실행:  python ai_status_bar_mac.py            필요 패키지: requirements-mac.txt (rumps · pyobjc-framework-Cocoa · pillow)
        --autostart / --no-autostart          LaunchAgent 등록(+즉시 기동) / 해제(+종료)
        --unlink-statusline                   모든 Claude 계정 폴더의 상태줄 연결 해제 (제거 전에)
-       --setup                               설정 방법 안내만 출력 (macOS 판에는 설정 창이 없다 — 메뉴에서 바꾼다)
+       --setup                               설정 창 열기 (이미 떠 있으면 그 인스턴스의 창을 연다)
 """
 import fcntl
 import os
@@ -58,19 +58,19 @@ def main(argv):
         for d in unlink_statusline_all():
             print("unlinked:", d)
         return 0
-    if "--setup" in argv:
-        from i18n import set_language, t
-        from mac.paths import SETTINGS_PATH
-        from mac.settings import load_settings
-        set_language(load_settings()["language"])
-        print(t("mac_setup_hint", path=SETTINGS_PATH))
-        return 0
     lock = single_instance()
-    if lock is None:
+    if lock is None:                                 # 이미 떠 있다 — --setup 이면 그 인스턴스에 «설정 창 열어»
+        if "--setup" in argv:
+            from Foundation import NSDistributedNotificationCenter
+            from mac.paths import OPEN_SETTINGS_NOTE
+            NSDistributedNotificationCenter.defaultCenter().postNotificationName_object_userInfo_deliverImmediately_(
+                OPEN_SETTINGS_NOTE, None, None, True)
         return 0
     applog.install_crash_handlers()
     from mac.app import MacStatusBar
-    app = MacStatusBar()
+    from mac.paths import SETTINGS_PATH
+    first_run = not os.path.exists(SETTINGS_PATH)    # 처음 실행: 시작 설정 창을 먼저 (Windows 와 같다)
+    app = MacStatusBar(install_mode=first_run or "--setup" in argv)
     app.run()
     return 0
 
