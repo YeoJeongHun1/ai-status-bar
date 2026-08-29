@@ -11,6 +11,7 @@ import json
 import os
 from datetime import datetime, timedelta
 
+from i18n import SUPPORTED
 from providers import get as get_provider
 
 from .settings import BAR_STYLES, DEFAULT_SETTINGS, INDICATORS, MODES, OVERFLOW_POLICIES, PLACEMENTS, PROVIDERS, entry_key
@@ -88,7 +89,7 @@ def form_to_settings(form, rows):
         "placement": form["placement"] if form["placement"] in PLACEMENTS else "left",
         "overflow_policy": form["overflow_policy"] if form["overflow_policy"] in OVERFLOW_POLICIES else "slide",
         "switch_indicator": form["switch_indicator"] if form["switch_indicator"] in INDICATORS else "dots",
-        "language": form["language"],
+        "language": form["language"] if form.get("language") in ("auto",) + SUPPORTED else "auto",
         "data_source": form["data_source"] if form["data_source"] in ("api", "official") else "api",
         "official_hide_unsupported": bool(form["official_hide_unsupported"]),
         "max_width_pt": max(0, min(2000, int(form.get("max_width_pt") or 0))),

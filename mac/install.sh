@@ -6,7 +6,7 @@
 #   zsh mac/install.sh --build         venv 를 만든 뒤 build_mac.sh 로 번들을 만들어 그것으로 설치
 # 만드는 것(전부 홈 아래, sudo 없음): ~/Library/Application Support/AIStatusBar/{venv,settings.json},
 #   ~/Applications/AI Status Bar.app (번들 설치 때), ~/Library/LaunchAgents/com.yeojeonghun.ai-status-bar.plist, ~/Library/Logs/AIStatusBar/.
-set -e
+set -eu
 ROOT="${0:a:h:h}"
 APP_SUPPORT="$HOME/Library/Application Support/AIStatusBar"
 VENV="$APP_SUPPORT/venv"
@@ -38,6 +38,7 @@ mkdir -p "$APP_SUPPORT" "$LOGS"
 make_venv() {
     echo "python: $PY ($("$PY" --version))"
     [[ -x "$VENV/bin/python" ]] || "$PY" -m venv "$VENV"
+    "$VENV/bin/python" -m pip install --quiet "pip>=25"
     "$VENV/bin/python" -m pip install --quiet --upgrade pip
     "$VENV/bin/python" -m pip install --quiet -r "$ROOT/requirements-mac.txt"
     "$VENV/bin/python" -c 'import rumps, AppKit, PIL' || { echo "패키지 설치 실패" >&2; exit 1; }

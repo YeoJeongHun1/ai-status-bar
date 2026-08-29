@@ -15,8 +15,9 @@
 #
 # key = first 12 hex chars of SHA-1(UTF-8) of the config-folder path after abspath -> trim trailing "/"
 #       (must match official_key() in providers/claude_code.py; os.path.normcase is a no-op on macOS)
-# JSON is handled by the app's venv python (installed by mac/install.sh); falls back to any python3 on PATH.
-# If neither exists nothing is saved and the original command (if any) still cannot be looked up -> prints nothing.
+# JSON is handled by a python interpreter, tried in this order: the app bundle's own  Contents/MacOS/python  (when this
+# script runs from inside  AI Status Bar.app/Contents/Resources  — no Python installation needed), the app's venv python
+# (source install, mac/install.sh), then any python3 on PATH. With none of them nothing is saved and nothing is printed.
 emulate -L zsh
 raw="$(cat)"
 [[ -z "$raw" ]] && exit 0
@@ -27,8 +28,11 @@ while [[ "$norm" == */ && "$norm" != "/" ]]; do norm="${norm%/}"; done
 key="$(printf '%s' "$norm" | /usr/bin/shasum -a 1 | /usr/bin/cut -c1-12)"
 
 out_dir="$HOME/Library/Application Support/AIStatusBar/official"
-py="$HOME/Library/Application Support/AIStatusBar/venv/bin/python"
-[[ -x "$py" ]] || py="$(command -v python3 2>/dev/null)"
+here="${0:a:h}"
+py=""
+for cand in "$here/../MacOS/python" "$HOME/Library/Application Support/AIStatusBar/venv/bin/python" "$(command -v python3 2>/dev/null)"; do
+    [[ -n "$cand" && -x "$cand" ]] && { py="$cand"; break; }
+done
 [[ -n "$py" ]] || exit 0
 
 # --- 1. save only what the app displays (exit 3 = an original command is kept -> step 2) ---

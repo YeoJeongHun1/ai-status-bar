@@ -40,6 +40,9 @@ class FakeApp:
     def refresh_async(self, manual=False):
         return True
 
+    def info_for(self, e):
+        return {"connected": False, "reason": "", "plan": None, "expires_at": None, "unchecked": True}
+
     def toggle_statusline(self, path):
         pass
 

@@ -18,12 +18,12 @@ from datetime import datetime, timedelta
 import objc
 import rumps
 from AppKit import NSApplication, NSEvent, NSObject, NSScreen
-from Foundation import NSDistributedNotificationCenter
+from Foundation import NSDistributedNotificationCenter, NSTimer
 from PyObjCTools import AppHelper
 
 import applog
 import polling
-from i18n import LANG_NAMES, SUPPORTED, set_language, t, tr_error
+from i18n import LANG_NAMES, SUPPORTED, current_language, set_language, t, tr_error
 from providers import fmt_reset, get as get_provider
 from providers import claude_code as cc
 from version import __version__
@@ -76,6 +76,36 @@ class _Delegate(NSObject):
         self.app.open_settings()
 
 
+class _Ticker(NSObject):
+    """폴링 타이머 — rumps.Timer 는 start() 하자마자 한 번 발화하므로(설정 변경 때마다 즉시 조회 = 디바운스 우회) NSTimer 를 직접 쓴다.
+    첫 발화는 interval 뒤. 즉시 조회가 필요하면 호출자가 refresh_async(manual=True) 를 부른다."""
+
+    def initWithCallback_(self, cb):
+        self = objc.super(_Ticker, self).init()
+        self.cb = cb
+        self.timer = None
+        self.interval = None
+        return self
+
+    def fire_(self, _timer):
+        try:
+            self.cb()
+        except Exception as e:
+            applog.warn("ticker", e)
+
+    @objc.python_method
+    def start(self, interval):
+        self.stop()
+        self.interval = interval
+        self.timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(interval, self, "fire:", None, True)
+
+    @objc.python_method
+    def stop(self):
+        if self.timer is not None:
+            self.timer.invalidate()
+            self.timer = None
+
+
 class MacStatusBar(rumps.App):
     def __init__(self, install_mode=False):
         super().__init__(APP_TITLE, title="…", quit_button=None)
@@ -85,6 +115,7 @@ class MacStatusBar(rumps.App):
             save_settings(self.settings)
         self.install_mode = install_mode
         self.data = {}
+        self.info_cache = {}                   # entry_key → provider.info() — 폴링 스레드에서만 갱신 (키체인 -w 는 메인 스레드에서 부르지 않는다)
         self.backoff = polling.Backoff()
         self.debounce = polling.Debounce()
         self._lock = threading.Lock()
@@ -98,7 +129,7 @@ class MacStatusBar(rumps.App):
         self.settings_ctl = None
         self._delegate = _Delegate.alloc().initWithApp_(self)
         self._menu._menu.setDelegate_(self._delegate)
-        self.poll_timer = rumps.Timer(self._on_poll, self.poll_sec())
+        self.poll_timer = _Ticker.alloc().initWithCallback_(self._on_poll)
         self.slide_timer = rumps.Timer(self._on_slide, self.settings["slide_sec"])
         self.watch_timer = rumps.Timer(self._on_watch, WATCH_SEC)
         self.build_menu()
@@ -109,7 +140,8 @@ class MacStatusBar(rumps.App):
         NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)   # Dock 아이콘 없음
         NSDistributedNotificationCenter.defaultCenter().addObserver_selector_name_object_(
             self._delegate, "openSettingsNote:", OPEN_SETTINGS_NOTE, None)
-        self.poll_timer.start()           # 첫 발화가 즉시라 시작하자마자 조회한다
+        self.poll_timer.start(self.poll_sec())
+        self.refresh_async()              # 첫 조회
         self.watch_timer.start()
         self.sync_slide_timer()
         if self.install_mode:
@@ -165,11 +197,28 @@ class MacStatusBar(rumps.App):
                 return p.fetch(e["path"]), None
 
             polling.run_refresh(entries, fetch, self.data, self.backoff, key_of=entry_key)
+            for d in self.data.values():                       # 오류 문자열에 토큰·경로가 섞여도 화면·로그엔 가린 것만
+                if d.get("error"):
+                    d["error"] = applog.mask(d["error"])
+            for e in entries:                                  # 연결 상태(플랜·만료) — 백오프 중이면 키체인을 다시 두드리지 않는다
+                k = entry_key(e)
+                if self.backoff.blocked(k):
+                    continue
+                try:
+                    self.info_cache[k] = get_provider(e["provider"]).info(e["path"])
+                except Exception as ex:
+                    self.info_cache[k] = {"connected": False, "reason": f"err_token_read {applog.mask(ex)}", "plan": None, "expires_at": None}
         except Exception as ex:
             applog.warn("_refresh", ex)
         finally:
             self._lock.release()
         AppHelper.callAfter(self.after_refresh)
+
+    UNCHECKED = {"connected": False, "reason": "", "plan": None, "expires_at": None, "unchecked": True}
+
+    def info_for(self, e):
+        """캐시된 provider.info() — UI(메인 스레드)는 이것만 본다. 아직 없으면 «미확인»."""
+        return self.info_cache.get(entry_key(e), self.UNCHECKED)
 
     def after_refresh(self):
         self.update_title()
@@ -385,11 +434,7 @@ class MacStatusBar(rumps.App):
         add(rumps.MenuItem(t("menu_quit"), callback=lambda _: rumps.quit_application(), key="q"))
 
     def card_for(self, e, highlighted=False):
-        p = get_provider(e["provider"])
-        try:
-            plan = p.info(e["path"]).get("plan")
-        except Exception:
-            plan = None
+        plan = self.info_for(e).get("plan")
         return R.card_image(e, self.data.get(entry_key(e)), plan, self.settings["show_scoped"], self.official(), highlighted)
 
     def card_clicked(self, i):
@@ -403,10 +448,7 @@ class MacStatusBar(rumps.App):
         """카드 이미지를 못 그릴 때의 글자 폴백."""
         p = get_provider(e["provider"])
         d = self.data.get(entry_key(e)) or {}
-        try:
-            plan = p.info(e["path"]).get("plan") or ""
-        except Exception:
-            plan = ""
+        plan = self.info_for(e).get("plan") or ""
         lines = [f"{p.name} · {e['label']}" + (f" · {plan}" if plan else "")]
         u = d.get("usage")
         if u:
@@ -430,8 +472,7 @@ class MacStatusBar(rumps.App):
 
     # ---------- 설정 변경 ----------
     def apply_settings(self, new, autostart=None):
-        """설정 창 «저장» / 메뉴 즉시 변경 공통: 저장 → 언어·타이머·넘침 상태 리셋 → 제목·메뉴 → 조회."""
-        lang_changed = new["language"] != self.settings["language"]
+        """설정 창 «저장» / 메뉴 즉시 변경 공통: 저장 → 언어·타이머·넘침 상태 리셋 → 제목·메뉴 → 조회(10초 디바운스)."""
         self.settings = new
         try:
             save_settings(self.settings)
@@ -446,18 +487,20 @@ class MacStatusBar(rumps.App):
             except Exception as e:
                 applog.warn("autostart", e)
                 rumps.alert(APP_TITLE, t("autostart_failed", e=e))
-        if lang_changed:
-            set_language(new["language"])
+        prev_lang = current_language()
+        set_language(new["language"])             # 같은 dict 를 넘겨도(메뉴 즉시 변경) 실제 언어가 바뀌었는지로 판단한다
+        lang_changed = current_language() != prev_lang
         self.cur = 0
         self.overflow = M.Overflow()
         self._auto_available = None
-        self.poll_timer.stop()
-        self.poll_timer.interval = self.poll_sec()
-        self.poll_timer.start()                   # 즉시 한 번 조회
+        if self.poll_timer.timer is not None and self.poll_timer.interval != self.poll_sec():
+            self.poll_timer.start(self.poll_sec())          # 주기만 바꾼다 — 즉시 발화 없음
         self.sync_slide_timer()
         self.update_title()
         if not self.menu_open:
             self.build_menu()
+        self.refresh_async(manual=True)           # 수동 새로고침과 같은 10초 디바운스
+        return lang_changed
 
     def save(self):
         self.apply_settings(self.settings)
