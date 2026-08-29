@@ -3,7 +3,7 @@
 
 - clamp_poll_sec: 환경변수 AI_STATUS_BAR_POLL_SEC 는 60초 미만·0·음수·문자를 받지 않는다 (기본 300).
 - Debounce: 수동 «새로고침» 연타는 MIN_MANUAL_GAP 안에 한 번만.
-- Backoff: 계정별로 429(Retry-After 존중)·5xx·네트워크 오류 때 60→120→240…최대 1800초 지수 백오프, 성공하면 리셋.
+- Backoff: 계정별로 429(Retry-After 존중)·5xx·네트워크 오류·(macOS) 키체인 거부/대기 때 60→120→240…최대 1800초 지수 백오프, 성공하면 리셋.
 - run_refresh: 항목 목록을 돌며 fetch 를 부르되 백오프 중인 항목은 건너뛴다. 인플라이트 락은 호출자(StatusBar)가 건다.
 """
 from datetime import datetime, timedelta
@@ -65,7 +65,8 @@ class Backoff:
         if head == "err_429":
             delay = int(arg) if arg.isdigit() else self.first
             delay = max(1, min(self.maximum, delay))
-        elif head == "err_http" and arg.isdigit() and int(arg) >= 500 or head == "err_network":
+        elif head == "err_http" and arg.isdigit() and int(arg) >= 500 or head in ("err_network", "err_keychain_denied", "err_keychain_prompt"):
+            # 키체인 거부/다이얼로그 대기(macOS)도 지수 백오프 — 5분마다 «허용» 다이얼로그를 다시 띄우지 않게
             prev = self._state.get(key, {}).get("delay") or 0
             delay = min(self.maximum, prev * 2 if prev else self.first)
         else:

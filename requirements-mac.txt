@@ -1,0 +1,8 @@
+# macOS 메뉴 막대 판 (ai_status_bar_mac.py). Python 3.11+ (Homebrew python3 권장 — /usr/bin/python3 은 3.9)
+# 실측 조합(macOS 26.4 · Python 3.14.6 · arm64)으로 고정한다 — build_mac.sh 의 py2app 도 같은 조합.
+pillow==12.3.0
+rumps==0.4.0
+pyobjc-core==12.2.2
+pyobjc-framework-Cocoa==12.2.2
+pyobjc-framework-Quartz==12.2.2
+# build_mac.sh (.app 번들): py2app==0.28.10
