@@ -14,8 +14,9 @@ import webbrowser
 from datetime import datetime
 
 import rumps
-from AppKit import (NSApplication, NSColor, NSFont, NSFontAttributeName, NSForegroundColorAttributeName,
-                    NSMutableAttributedString, NSObject)
+from AppKit import (NSApplication, NSAttributedString, NSColor, NSFont, NSFontAttributeName,
+                    NSForegroundColorAttributeName, NSImage, NSMutableAttributedString, NSObject, NSTextAttachment)
+from Foundation import NSData
 from PyObjCTools import AppHelper
 
 import applog
@@ -27,8 +28,8 @@ from version import __version__
 
 from . import launchagent, title as T
 from .paths import APP_TITLE, LOG_DIR, README_URL, SETTINGS_PATH, STATUSLINE_SH, SUPPORT_URL
-from .settings import (MODES, SLIDE_CHOICES, enabled_entries_of, ensure_discovered, entry_key, load_settings,
-                       merge_discovered, save_settings)
+from .settings import (BAR_STYLES, MODES, SLIDE_CHOICES, enabled_entries_of, ensure_discovered, entry_key,
+                       load_settings, merge_discovered, save_settings)
 
 POLL_SEC = polling.clamp_poll_sec(os.environ.get("AI_STATUS_BAR_POLL_SEC"))
 OFFICIAL_POLL_SEC = 30
@@ -147,34 +148,28 @@ class MacStatusBar(rumps.App):
     # ---------- 제목 ----------
     def update_title(self):
         runs = T.build_runs(self.visible(), self.data, entry_key, self.settings["style"]["label"],
-                            self.settings["show_scoped"], t("mac_title_no_entries"))
+                            self.settings["show_scoped"], t("mac_title_no_entries"),
+                            bars=T.want_bars(self.settings["style"]["bars"]))
         text = T.plain(runs)
         self.title = text
         try:
-            self._apply_colors(runs, text)
+            self._apply_attributed(runs)
         except Exception as e:
             applog.warn("attributed title", e)
             self.title = T.with_dots(runs)
 
     _COLORS = {"green": "systemGreenColor", "yellow": "systemYellowColor", "red": "systemRedColor"}
 
-    def _apply_colors(self, runs, text):
+    def _apply_attributed(self, runs):
+        """runs → NSAttributedString (퍼센트 색 + 막대 NSTextAttachment) → 상태 항목 버튼."""
         nsapp = getattr(self, "_nsapp", None)
         if nsapp is None:                     # run() 전 — 아직 상태 항목이 없다
             return
         button = nsapp.nsstatusitem.button()
-        font = NSFont.monospacedDigitSystemFontOfSize_weight_(NSFont.menuBarFontOfSize_(0).pointSize(), 0.0)
-        attr = NSMutableAttributedString.alloc().initWithString_(text)
-        whole = (0, len(text))
-        attr.addAttribute_value_range_(NSFontAttributeName, font, whole)
-        attr.addAttribute_value_range_(NSForegroundColorAttributeName, NSColor.labelColor(), whole)
-        pos = 0
-        for s, pct in runs:
-            if pct is not None:
-                color = getattr(NSColor, self._COLORS[T.tier(pct)])()
-                attr.addAttribute_value_range_(NSForegroundColorAttributeName, color, (pos, len(s)))
-            pos += len(s)
+        attr = build_attributed(runs, self._COLORS)
         button.setAttributedTitle_(attr)
+        if os.environ.get("AI_STATUS_BAR_DEBUG"):
+            print("title:", T.plain(runs), "| attributed:", describe_attributed(attr), flush=True)
 
     # ---------- 슬라이드 ----------
     def sync_slide_timer(self):
@@ -241,6 +236,11 @@ class MacStatusBar(rumps.App):
                 it = add(rumps.MenuItem(f"{get_provider(e['provider']).short} · {e['label']}",
                                         callback=lambda _, k=entry_key(e): self.set_fixed(k)), fixed)
                 it.state = 1 if self.settings["fixed_entry"] == entry_key(e) else 0
+        bars = add(rumps.MenuItem(t("mac_menu_bars")))
+        for style in BAR_STYLES:
+            it = add(rumps.MenuItem(t("mac_bars_auto") if style == "auto" else t(f"style_bars_{style}"),
+                                    callback=lambda _, style=style: self.set_bars(style)), bars)
+            it.state = 1 if self.settings["style"]["bars"] == style else 0
         it = add(rumps.MenuItem(t("mac_menu_label"), callback=lambda _: self.toggle("style.label")))
         it.state = 1 if self.settings["style"]["label"] else 0
         it = add(rumps.MenuItem(t("mac_menu_scoped"), callback=lambda _: self.toggle("show_scoped")))
@@ -322,6 +322,10 @@ class MacStatusBar(rumps.App):
         self.settings["slide_sec"] = int(sec)
         self.save()
         self.sync_slide_timer()
+
+    def set_bars(self, style):
+        self.settings["style"]["bars"] = style
+        self.save()
 
     def set_fixed(self, key):
         self.settings["fixed_entry"] = key
@@ -438,3 +442,51 @@ def _forget(menu):
         if isinstance(item, rumps.MenuItem):
             _forget(item)
             table.pop(item._menuitem, None)
+
+
+# ---------- NSAttributedString 조립 (앱 인스턴스 없이도 검사할 수 있게 모듈 함수) ----------
+
+def menu_font():
+    return NSFont.monospacedDigitSystemFontOfSize_weight_(NSFont.menuBarFontOfSize_(0).pointSize(), 0.0)
+
+
+def bars_image(values):
+    """title.bar_png → NSImage (포인트 크기 지정, 템플릿 아님 = 색 유지)."""
+    png = T.bar_png(values)
+    img = NSImage.alloc().initWithData_(NSData.dataWithBytes_length_(png, len(png)))
+    if img is None:
+        raise RuntimeError("NSImage from PNG failed")
+    img.setSize_(T.bar_size_pt())
+    img.setTemplate_(False)
+    return img
+
+
+def build_attributed(runs, colors=MacStatusBar._COLORS):
+    font = menu_font()
+    attr = NSMutableAttributedString.alloc().init()
+    w_pt, h_pt = T.bar_size_pt()
+    y = font.descender() + (font.ascender() - font.descender() - h_pt) / 2.0     # 글자 세로 중앙에 맞춘다
+    for s, pct in runs:
+        if isinstance(s, T.Bars):
+            att = NSTextAttachment.alloc().init()
+            att.setImage_(bars_image(s.values))
+            att.setBounds_(((0, y), (w_pt, h_pt)))
+            attr.appendAttributedString_(NSAttributedString.attributedStringWithAttachment_(att))
+            continue
+        color = getattr(NSColor, colors[T.tier(pct)])() if pct is not None else NSColor.labelColor()
+        attr.appendAttributedString_(NSAttributedString.alloc().initWithString_attributes_(
+            s, {NSFontAttributeName: font, NSForegroundColorAttributeName: color}))
+    return attr
+
+
+def describe_attributed(attr):
+    """검사용: 글자 수·첨부 이미지 수와 크기."""
+    n, sizes = 0, []
+    s = attr.string()
+    for i, ch in enumerate(s):
+        if ch == "\ufffc":
+            att = attr.attribute_atIndex_effectiveRange_("NSAttachment", i, None)[0]
+            img = att.image() if att is not None else None
+            n += 1
+            sizes.append(tuple(img.size()) if img is not None else None)
+    return {"chars": len(s), "attachments": n, "image_sizes": sizes}

@@ -1107,6 +1107,8 @@ for _lang, _d in EXTRA.items():
 # ------------------------------------------------------------------ macOS 메뉴 막대 판 (ai_status_bar_mac.py) 키
 MAC = {
 "ko": {
+    "mac_menu_bars": "막대",
+    "mac_bars_auto": "자동 (= 막대 + 숫자)",
     "mac_menu_usage_pages": "사용량 페이지 열기",
     "err_keychain_prompt": "키체인 접근 허용 필요 — macOS 다이얼로그에서 «항상 허용»을 누르세요",
     "err_keychain_denied": "키체인 접근이 거부됨 — 키체인 접근 앱에서 «Claude Code-credentials» 항목에 security 접근을 허용하거나 다음 조회 때 «항상 허용»을 누르세요",
@@ -1135,6 +1137,8 @@ MAC = {
     "mac_reset": "리셋 {t}",
 },
 "en": {
+    "mac_menu_bars": "Bars",
+    "mac_bars_auto": "Auto (= bars + numbers)",
     "mac_menu_usage_pages": "Open usage page",
     "err_keychain_prompt": "Keychain access needed — click «Always Allow» in the macOS dialog",
     "err_keychain_denied": "Keychain access denied — allow «security» on the «Claude Code-credentials» item in Keychain Access, or click «Always Allow» at the next check",
@@ -1163,6 +1167,8 @@ MAC = {
     "mac_reset": "resets {t}",
 },
 "ja": {
+    "mac_menu_bars": "バー",
+    "mac_bars_auto": "自動(= バー + 数字)",
     "mac_menu_usage_pages": "使用量ページを開く",
     "err_keychain_prompt": "キーチェーンへのアクセス許可が必要です — macOS のダイアログで「常に許可」を押してください",
     "err_keychain_denied": "キーチェーンへのアクセスが拒否されました — キーチェーンアクセスで「Claude Code-credentials」項目に security を許可するか、次回の確認時に「常に許可」を押してください",
@@ -1191,6 +1197,8 @@ MAC = {
     "mac_reset": "リセット {t}",
 },
 "pt": {
+    "mac_menu_bars": "Barras",
+    "mac_bars_auto": "Automático (= barras + números)",
     "mac_menu_usage_pages": "Abrir página de uso",
     "err_keychain_prompt": "É preciso permitir o acesso às Chaves — clique em «Sempre Permitir» na caixa de diálogo do macOS",
     "err_keychain_denied": "Acesso às Chaves negado — permita «security» no item «Claude Code-credentials» no Acesso às Chaves, ou clique em «Sempre Permitir» na próxima verificação",
@@ -1219,6 +1227,8 @@ MAC = {
     "mac_reset": "reinicia {t}",
 },
 "es": {
+    "mac_menu_bars": "Barras",
+    "mac_bars_auto": "Automático (= barras + números)",
     "mac_menu_usage_pages": "Abrir página de uso",
     "err_keychain_prompt": "Se necesita acceso al llavero — pulsa «Permitir siempre» en el diálogo de macOS",
     "err_keychain_denied": "Acceso al llavero denegado — permite «security» en el elemento «Claude Code-credentials» en Acceso a Llaveros, o pulsa «Permitir siempre» en la próxima comprobación",

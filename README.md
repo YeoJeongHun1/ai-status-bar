@@ -127,7 +127,7 @@ exe 다시 만들기: `build.cmd` (PyInstaller, 폴더 빌드 + zip + `.sha256`)
 C 23%/66% · X 4%/12%         항목 여럿(동시에)   (C = Claude, X = Codex; 라벨 켜면 work 23%/66% · home 4%/12%)
 ```
 
-퍼센트는 초록(<50%) · 노랑(50~79%) · 빨강(80%+) 으로 칠합니다(`NSAttributedString`; 못 칠하면 🟢🟡🔴 로 폴백). 조회 전 `…`, 오류 `⚠`, 계정 없음 `AI —`.
+항목마다 숫자 앞에 **2줄 미니 막대**(위 5h · 아래 7d, 36×12pt, Pillow 로 그린 2x 투명 PNG 를 `NSTextAttachment` 로 끼움)가 붙고, 퍼센트와 막대는 초록(<50%) · 노랑(50~79%) · 빨강(80%+) 으로 칠합니다(막대 트랙은 반투명 회색이라 다크·라이트 메뉴 막대 양쪽에서 보임; 값이 없으면 빈 트랙). 메뉴 «막대» 에서 «자동(= 막대 + 숫자) / 막대 + 숫자 / 숫자만» — Windows 의 `style.bars` 와 같은 값. 색을 못 입히면 🟢🟡🔴 로 폴백. 조회 전 `…`, 오류 `⚠`, 계정 없음 `AI —`.
 
 **설치** (Python 3.11+ — Homebrew `python3` 권장. `/usr/bin/python3` 은 3.9 라 안 됩니다)
 
@@ -398,7 +398,7 @@ Tests: `pip install pytest` then `python -m pytest tests` (redirect blocking, de
 C 23%/66% · X 4%/12%         several (all mode)  (C = Claude, X = Codex; with labels: work 23%/66% · home 4%/12%)
 ```
 
-Percentages are colored green (<50%) · yellow (50–79%) · red (80%+) via `NSAttributedString` (falls back to 🟢🟡🔴 if that fails). `…` while loading, `⚠` on error, `AI —` with no accounts.
+Each entry gets a **two-line mini bar** in front of the numbers (5h above, 7d below, 36×12 pt, a 2x transparent PNG drawn with Pillow and embedded as an `NSTextAttachment`); bars and percentages are colored green (<50%) · yellow (50–79%) · red (80%+), the track is translucent grey so it shows on both dark and light menu bars (empty track when there is no value). Menu «Bars»: «Auto (= bars + numbers) / Bars + numbers / Numbers only» — same values as Windows' `style.bars`. Falls back to 🟢🟡🔴 if coloring fails. `…` while loading, `⚠` on error, `AI —` with no accounts.
 
 **Install** (Python 3.11+ — Homebrew `python3` recommended; `/usr/bin/python3` is 3.9 and does not work)
 
