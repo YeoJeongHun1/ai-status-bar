@@ -11,7 +11,7 @@ import os
 from i18n import SUPPORTED
 from providers import all_providers, get as get_provider
 
-from .paths import APP_SUPPORT, SETTINGS_PATH
+from .paths import APP_SUPPORT, SETTINGS_PATH  # noqa: F401
 
 MODES = ("all", "click", "slide", "fixed")
 BAR_STYLES = ("auto", "bars", "numbers")
@@ -32,6 +32,7 @@ DEFAULT_SETTINGS = {
     "language": "auto",
     "data_source": "api",        # api / official
     "official_hide_unsupported": True,
+    "max_width_pt": 0,           # macOS 전용: 메뉴 막대에서 쓸 최대 폭(pt). 0 = 자동(항목이 화면 밖으로 밀리면 감지)
     "seen_providers": [],
 }
 PROVIDERS = all_providers()
@@ -77,6 +78,8 @@ def load_settings(path=None):
     if "official_hide_unsupported" in raw:
         s["official_hide_unsupported"] = bool(raw["official_hide_unsupported"])
     s["seen_providers"] = [x for x in (raw.get("seen_providers") or []) if isinstance(x, str)]
+    if isinstance(raw.get("max_width_pt"), (int, float)):
+        s["max_width_pt"] = max(0, min(2000, int(raw["max_width_pt"])))
     entries = []
     for a in raw.get("entries") or []:
         if isinstance(a, dict) and a.get("path") and get_provider(a.get("provider", "")):

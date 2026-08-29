@@ -74,3 +74,13 @@ def test_tier_and_dot_fallback():
     e = E("claude_code", "w")
     runs = T.build_runs([e], {key(e): U(23, 85)}, key, False, False)
     assert T.with_dots(runs) == "5h 🟢23% · 7d 🔴85%"
+
+
+def test_label_runs_and_tiers():
+    e = E("claude_code", "work")
+    runs = T.build_runs([e], {key(e): U(23, 66)}, key, True, False, bars=True)
+    assert runs[0] == (T.Label("work "), None) and isinstance(runs[1][0], T.Bars)
+    assert T.plain(runs) == "work  5h 23% · 7d 66%"
+    assert T.plain(T.build_runs([e], {key(e): U(23, 66)}, key, False, False, bars=True, tier="compact")) == "5h 23% · 7d 66%"
+    assert T.build_runs([e], {key(e): U(23, 66)}, key, False, False, tier="collapsed", prefix="●○ ") == [("●○ ›", None)]
+    assert T.plain(T.build_runs([e], {key(e): U(23, 66)}, key, False, False, prefix="⇄ ")) == "⇄ 5h 23% · 7d 66%"

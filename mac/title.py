@@ -20,6 +20,20 @@ BAR_W_PT, BAR_LINE_PT, BAR_GAP_PT, BAR_SCALE = 36, 5, 2, 2
 TRACK_RGBA = (128, 128, 128, 110)
 
 
+class Label:
+    """라벨 조각 — 설정의 라벨 색(label_color)을 입힐 수 있게 글자와 구분한다."""
+    __slots__ = ("text",)
+
+    def __init__(self, text):
+        self.text = text
+
+    def __eq__(self, other):
+        return isinstance(other, Label) and other.text == self.text
+
+    def __repr__(self):
+        return f"Label({self.text!r})"
+
+
 class Bars:
     """제목 안의 막대 자리 — values = 창 순서대로 pct 또는 None (최대 2개: 5h, 7d)."""
     __slots__ = ("values",)
@@ -89,7 +103,7 @@ def entry_runs(e, d, prefix, single, show_scoped, bars=False):
     """항목 하나의 조각들. d = {"usage", "error", ...} (없으면 조회 전). bars=True 면 숫자 앞에 (Bars, None)."""
     runs = []
     if prefix:
-        runs.append((prefix + " ", None))
+        runs.append((Label(prefix + " "), None))
     usage = (d or {}).get("usage")
     if not usage:
         if bars:
@@ -121,11 +135,19 @@ def entry_runs(e, d, prefix, single, show_scoped, bars=False):
     return runs
 
 
-def build_runs(visible, data, key_of, show_label, show_scoped, no_entries_text="AI —", bars=False):
+COLLAPSED = "›"
+
+
+def build_runs(visible, data, key_of, show_label, show_scoped, no_entries_text="AI —", bars=False, tier=None, prefix=""):
+    """tier: None/"full"(막대는 bars 인자대로) · "compact"(숫자만) · "collapsed"(› 하나). prefix: 캐러셀 표시 글리프."""
     if not visible:
         return [(no_entries_text, None)]
+    if tier == "collapsed":
+        return [(prefix + COLLAPSED, None)]
+    if tier == "compact":
+        bars = False
     single = len(visible) == 1
-    runs = []
+    runs = [(prefix, None)] if prefix else []
     for i, e in enumerate(visible):
         if i:
             runs.append((" · ", None))
@@ -139,10 +161,14 @@ def want_bars(bars_style):
     return bars_style != "numbers"
 
 
+def _txt(t):
+    return t.text if isinstance(t, Label) else t
+
+
 def plain(runs):
-    return "".join(t for t, _ in runs if not isinstance(t, Bars))
+    return "".join(_txt(t) for t, _ in runs if not isinstance(t, Bars))
 
 
 def with_dots(runs):
     """색을 못 입힐 때의 폴백 — 퍼센트 앞에 ●색 이모지 (막대 자리는 뺀다)."""
-    return "".join((DOTS[tier(p)] + t) if p is not None else t for t, p in runs if not isinstance(t, Bars))
+    return "".join((DOTS[tier(p)] + _txt(t)) if p is not None else _txt(t) for t, p in runs if not isinstance(t, Bars))
