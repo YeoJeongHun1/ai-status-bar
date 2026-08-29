@@ -138,5 +138,5 @@ def ensure_discovered(s):
     return True
 
 
-__all__ = ["APP_SUPPORT", "DEFAULT_SETTINGS", "MODES", "SLIDE_CHOICES", "entry_key", "load_settings", "save_settings",
+__all__ = ["APP_SUPPORT", "DEFAULT_SETTINGS", "MODES", "BAR_STYLES", "SLIDE_CHOICES", "entry_key", "load_settings", "save_settings",
            "enabled_entries_of", "merge_discovered", "ensure_discovered"]
