@@ -330,12 +330,11 @@ class SettingsController(NSObject):
         self.preview_dirty()
 
     def row_status(self, r):
-        p = get_provider(r["provider"])
+        """(색, 짧은 글) — 폴링 스레드가 채운 캐시만 본다 (메인 스레드에서 키체인을 읽지 않는다)."""
         d = self.app.data.get(f"{r['provider']}|{r['path']}") or {}
-        try:
-            info = p.info(r["path"])
-        except Exception:
-            info = {"connected": False}
+        info = self.app.info_for(r)
+        if info.get("unchecked") and not d:
+            return NSColor.secondaryLabelColor(), t("st_unknown")
         if d.get("error") or not info.get("connected"):
             return NSColor.systemRedColor(), t("st_err")
         if d.get("usage") or info.get("connected"):
@@ -480,12 +479,11 @@ class SettingsController(NSObject):
         lines = []
         for e in self.app.settings["entries"]:
             p = get_provider(e["provider"])
-            try:
-                info = p.info(e["path"])
-            except Exception as ex:
-                info = {"connected": False, "reason": f"err_token_read {ex}", "plan": None, "expires_at": None}
+            info = self.app.info_for(e)
             d = self.app.data.get(entry_key(e)) or {}
-            if info["connected"]:
+            if info.get("unchecked"):
+                s = t("status_disconnected", label=e["label"], name=p.name, reason=t("st_unknown"))
+            elif info["connected"]:
                 s = t("status_connected", label=e["label"], name=p.name, plan=info["plan"] or "?",
                       exp=info["expires_at"].strftime("%m/%d %H:%M") if info["expires_at"] else "?")
             else:

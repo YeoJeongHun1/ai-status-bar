@@ -37,7 +37,7 @@ def plist_dict(python=None, script=None):
     args = [python or PYTHON]
     if script is not None or ENTRY_SCRIPT is not None:
         args.append(script or ENTRY_SCRIPT)
-    return {
+    d = {
         "Label": LAUNCH_LABEL,
         "ProgramArguments": args,
         "WorkingDirectory": ROOT_DIR,
@@ -48,6 +48,11 @@ def plist_dict(python=None, script=None):
         "StandardOutPath": os.path.join(LOG_DIR, "launchd.log"),
         "StandardErrorPath": os.path.join(LOG_DIR, "launchd.log"),
     }
+    # 지금 셸에 CLAUDE_CONFIG_DIR / CODEX_HOME 이 있으면 그대로 적는다 — launchd 는 셸 환경을 물려받지 않는다
+    env = {k: os.environ[k] for k in ("CLAUDE_CONFIG_DIR", "CODEX_HOME") if os.environ.get(k)}
+    if env:
+        d["EnvironmentVariables"] = env
+    return d
 
 
 def write_plist(python=None, script=None):
