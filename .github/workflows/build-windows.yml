@@ -42,7 +42,7 @@ jobs:
         shell: bash
         run: |
           ls -l dist/*.zip dist/*.sha256
-          cd dist && sha256sum -c *.sha256
+          cd dist && tr -d '\r' < *.sha256 | sha256sum -c -
       - name: 릴리스에 업로드
         shell: bash
         env:

@@ -25,7 +25,7 @@ copy /y LICENSE dist\AIStatusBar\LICENSE >nul
 if exist "dist\AIStatusBar-%VER%-win64.zip" del "dist\AIStatusBar-%VER%-win64.zip"
 python -c "import shutil; shutil.make_archive('dist/AIStatusBar-%VER%-win64', 'zip', 'dist', 'AIStatusBar')"
 rem SHA-256 next to the zip so downloads can be verified (attach both files to the release)
-python -c "import hashlib; p='dist/AIStatusBar-%VER%-win64.zip'; h=hashlib.sha256(open(p,'rb').read()).hexdigest(); open(p+'.sha256','w').write(h+'  '+p.split('/')[-1]+'\n'); print('sha256', h)"
+python -c "import hashlib; p='dist/AIStatusBar-%VER%-win64.zip'; h=hashlib.sha256(open(p,'rb').read()).hexdigest(); open(p+'.sha256','w',newline='').write(h+'  '+p.split('/')[-1]+'\n'); print('sha256', h)"
 echo.
 echo OK -> dist\AIStatusBar\AIStatusBar.exe  and  dist\AIStatusBar-%VER%-win64.zip (+ .sha256)
 pause
