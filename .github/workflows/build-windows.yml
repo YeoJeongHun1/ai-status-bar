@@ -9,8 +9,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "빌드·업로드할 릴리스 태그 (예: v1.3.0)"
+        description: "업로드할 릴리스 태그 (예: v1.3.0)"
         required: true
+      ref:
+        description: "빌드할 코드 ref (비우면 태그 그대로 — 태그의 build.cmd 가 깨졌을 때 main 지정용)"
+        required: false
 
 permissions:
   contents: write   # 릴리스에 자산 업로드
@@ -26,7 +29,7 @@ jobs:
         run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
-          ref: ${{ steps.tag.outputs.tag }}
+          ref: ${{ github.event.inputs.ref || steps.tag.outputs.tag }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
