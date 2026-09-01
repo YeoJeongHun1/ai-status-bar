@@ -1,0 +1,47 @@
+# Windows exe 빌드 — 맥/리눅스에서는 exe 를 만들 수 없어(PyInstaller 는 교차 빌드 불가)
+# GitHub 의 Windows 러너로 build.cmd 를 그대로 돌려 릴리스에 zip + .sha256 을 붙인다.
+# 실행: 태그(v*)를 밀면 자동, 또는 Actions 탭에서 수동(workflow_dispatch, 대상 태그 입력).
+name: build-windows
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "빌드·업로드할 릴리스 태그 (예: v1.3.0)"
+        required: true
+
+permissions:
+  contents: write   # 릴리스에 자산 업로드
+
+jobs:
+  win64:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: 대상 태그 결정
+        id: tag
+        shell: bash
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 의존성
+        run: pip install pillow pystray pywin32 pyinstaller
+      - name: 빌드 (build.cmd — 로컬과 같은 스크립트)
+        shell: cmd
+        run: build.cmd < NUL
+      - name: 스모크 — zip 존재·sha256 검증
+        shell: bash
+        run: |
+          ls -l dist/*.zip dist/*.sha256
+          cd dist && sha256sum -c *.sha256
+      - name: 릴리스에 업로드
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ steps.tag.outputs.tag }}" dist/*.zip dist/*.sha256 --clobber -R "${{ github.repository }}"
