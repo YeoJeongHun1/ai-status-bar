@@ -51,7 +51,7 @@ Claude work   5h ▬▬▬░░░░░ 23% ↺12:09   │   Codex work   5h �
 ## 설치
 
 1. 이 PC 에서 [Claude Code](https://code.claude.com) 나 [Codex CLI](https://developers.openai.com/codex) 로 **한 번 로그인**돼 있어야 합니다 (위 표의 파일이 그때 생깁니다).
-2. [Releases](https://github.com/YeoJeongHun1/ai-status-bar/releases) 에서 `AIStatusBar-<버전>-win64.zip` 을 받아 **원하는 폴더에 풉니다** (예: `%LOCALAPPDATA%\Programs\AIStatusBar`). macOS 는 같은 릴리스의 `AIStatusBar-<버전>-macos-arm64.zip` → [macOS 절](#설치-macos).
+2. [Releases](https://github.com/YeoJeongHun1/ai-status-bar/releases) 에서 `AIStatusBar-<버전>-win64.zip` 을 받아 **원하는 폴더에 풉니다** (예: `%LOCALAPPDATA%\Programs\AIStatusBar`). macOS 는 [v1.3.0 릴리스](https://github.com/YeoJeongHun1/ai-status-bar/releases/tag/v1.3.0)의 `AIStatusBar-1.3.0-macos-arm64.zip` → [macOS 절](#설치-macos).
    릴리스에 같이 올리는 `.sha256` 파일로 내려받은 zip 을 검증할 수 있습니다: `certutil -hashfile AIStatusBar-<버전>-win64.zip SHA256`.
 3. 푼 폴더의 `AIStatusBar.exe` 를 실행 → 시작 설정 창에서 계정이 잡혔는지 확인하고 「로그인할 때 자동 시작」을 고른 뒤 **시작**.
 
@@ -145,7 +145,7 @@ C [▬▬░░] 23%/66% · X [▬░░░] 4%/12%          항목 여럿 «모
 ### 설치 (macOS)
 
 1. 이 맥에서 [Claude Code](https://code.claude.com) 나 [Codex CLI](https://developers.openai.com/codex) 로 **한 번 로그인**돼 있어야 합니다 (Claude 는 키체인 항목, Codex 는 `~/.codex/auth.json` 이 그때 생깁니다).
-2. **번들** (**Apple Silicon · macOS 26 이상** — 번들에 들어간 Homebrew Python 3.14 의 최소 요구; Intel 이나 그 이하 macOS 는 아래 «소스» 로): [Releases](https://github.com/YeoJeongHun1/ai-status-bar/releases) 의 `AIStatusBar-<버전>-macos-arm64.zip` 을 받아 **Finder 에서 더블클릭**(아카이브 유틸리티) 또는 `ditto -x -k AIStatusBar-<버전>-macos-arm64.zip .` 으로 풀고 `AI Status Bar.app` 을 `~/Applications` 에 넣습니다 (`unzip` 도 됩니다 — zip 에 AppleDouble `._*` 파일을 넣지 않아 어느 쪽으로 풀어도 서명이 유지됩니다). 검증: `shasum -a 256 -c AIStatusBar-<버전>-macos-arm64.zip.sha256`. 번들은 Python 설치가 필요 없습니다(자체 파이썬 포함).
+2. **번들** (**Apple Silicon · macOS 26 이상** — 번들에 들어간 Homebrew Python 3.14 의 최소 요구; Intel 이나 그 이하 macOS 는 아래 «소스» 로): [v1.3.0 릴리스](https://github.com/YeoJeongHun1/ai-status-bar/releases/tag/v1.3.0) 의 `AIStatusBar-1.3.0-macos-arm64.zip` 을 받아 **Finder 에서 더블클릭**(아카이브 유틸리티) 또는 `ditto -x -k AIStatusBar-1.3.0-macos-arm64.zip .` 으로 풀고 `AI Status Bar.app` 을 `~/Applications` 에 넣습니다 (`unzip` 도 됩니다 — zip 에 AppleDouble `._*` 파일을 넣지 않아 어느 쪽으로 풀어도 서명이 유지됩니다). 검증: `shasum -a 256 -c AIStatusBar-1.3.0-macos-arm64.zip.sha256`. 번들은 Python 설치가 필요 없습니다(자체 파이썬 포함).
    **소스**: `git clone https://github.com/YeoJeongHun1/ai-status-bar && cd ai-status-bar && zsh mac/install.sh` — `dist/AI Status Bar.app` 이 있으면 그것을 `~/Applications` 에 복사하고, 없으면 `~/Library/Application Support/AIStatusBar/venv` 에 `requirements-mac.txt`(버전 고정) 를 설치해 소스로 돕니다(`--build` 로 번들을 직접 만들어 설치, `--source` 로 소스 강제). Python 3.11+ 필요(Homebrew `python3`; `/usr/bin/python3` 은 3.9 라 안 됨).
 3. 처음 실행하면 **시작 설정 창**이 뜹니다 → 계정이 잡혔는지 확인, «로그인할 때 자동 시작» 을 고른 뒤 **시작**. `install.sh` 는 LaunchAgent(`~/Library/LaunchAgents/com.yeojeonghun.ai-status-bar.plist`, RunAtLoad·KeepAlive 없음)를 등록하고 바로 띄웁니다.
 
@@ -395,7 +395,7 @@ Entry = service × account; several accounts per service are supported.
 ## Install
 
 1. Be logged in once with [Claude Code](https://code.claude.com) and/or [Codex CLI](https://developers.openai.com/codex) on this PC (that is what creates the files in the table above).
-2. Download `AIStatusBar-<ver>-win64.zip` from [Releases](https://github.com/YeoJeongHun1/ai-status-bar/releases) and unzip it anywhere (e.g. `%LOCALAPPDATA%\Programs\AIStatusBar`). On macOS take `AIStatusBar-<ver>-macos-arm64.zip` from the same release → [macOS section](#install-macos). Verify with the `.sha256` file attached to the release: `certutil -hashfile AIStatusBar-<ver>-win64.zip SHA256`.
+2. Download `AIStatusBar-<ver>-win64.zip` from [Releases](https://github.com/YeoJeongHun1/ai-status-bar/releases) and unzip it anywhere (e.g. `%LOCALAPPDATA%\Programs\AIStatusBar`). On macOS take `AIStatusBar-1.3.0-macos-arm64.zip` from the [v1.3.0 release](https://github.com/YeoJeongHun1/ai-status-bar/releases/tag/v1.3.0) → [macOS section](#install-macos). Verify with the `.sha256` file attached to the release: `certutil -hashfile AIStatusBar-<ver>-win64.zip SHA256`.
 3. Run `AIStatusBar.exe` → check that your accounts were found → tick "run at login" if you want → **Start**.
 
 **Remove — order matters**: ① if you used official mode, click «Remove status line link» in Settings (or run `AIStatusBar.exe --unlink-statusline`) — otherwise Claude Code keeps trying to run a script that no longer exists every time it draws its status line; ② turn off run-at-login (or `--no-autostart`); ③ delete the folder. What remains is `%LOCALAPPDATA%\AIStatusBar\` (settings, error log, official-mode files), which you may delete too.
@@ -467,7 +467,7 @@ C [▬▬░░] 23%/66% · X [▬░░░] 4%/12%          several entries, «
 ### Install (macOS)
 
 1. Be logged in once with [Claude Code](https://code.claude.com) and/or [Codex CLI](https://developers.openai.com/codex) on this Mac (that creates the Keychain item / `~/.codex/auth.json`).
-2. **Bundle** (**Apple Silicon · macOS 26 or later** — the minimum of the Homebrew Python 3.14 inside the bundle; Intel Macs or older macOS: use «Source» below): download `AIStatusBar-<ver>-macos-arm64.zip` from [Releases](https://github.com/YeoJeongHun1/ai-status-bar/releases), extract it by **double-clicking in Finder** (Archive Utility) or with `ditto -x -k AIStatusBar-<ver>-macos-arm64.zip .`, and put `AI Status Bar.app` into `~/Applications` (`unzip` works too — the zip carries no AppleDouble `._*` files, so the signature survives either way). Verify: `shasum -a 256 -c AIStatusBar-<ver>-macos-arm64.zip.sha256`. The bundle needs no Python installation (it ships its own).
+2. **Bundle** (**Apple Silicon · macOS 26 or later** — the minimum of the Homebrew Python 3.14 inside the bundle; Intel Macs or older macOS: use «Source» below): download `AIStatusBar-1.3.0-macos-arm64.zip` from the [v1.3.0 release](https://github.com/YeoJeongHun1/ai-status-bar/releases/tag/v1.3.0), extract it by **double-clicking in Finder** (Archive Utility) or with `ditto -x -k AIStatusBar-1.3.0-macos-arm64.zip .`, and put `AI Status Bar.app` into `~/Applications` (`unzip` works too — the zip carries no AppleDouble `._*` files, so the signature survives either way). Verify: `shasum -a 256 -c AIStatusBar-1.3.0-macos-arm64.zip.sha256`. The bundle needs no Python installation (it ships its own).
    **Source**: `git clone https://github.com/YeoJeongHun1/ai-status-bar && cd ai-status-bar && zsh mac/install.sh` — uses `dist/AI Status Bar.app` if present (copied to `~/Applications`), otherwise installs the pinned `requirements-mac.txt` into `~/Library/Application Support/AIStatusBar/venv` and runs from source (`--build` builds the bundle first, `--source` forces source). Python 3.11+ (Homebrew `python3`; `/usr/bin/python3` is 3.9).
 3. The first launch opens the **first-run setup** window → check that your accounts were found → tick «Start at login» → **Start**. `install.sh` registers the LaunchAgent (`~/Library/LaunchAgents/com.yeojeonghun.ai-status-bar.plist`, RunAtLoad, no KeepAlive) and starts the app right away.
 
