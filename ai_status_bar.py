@@ -56,6 +56,7 @@ RIGHT_MARGIN = 20       # 다음 내용 앞 여백
 EDGE_BAND = 24          # 우리 창 양끝 몇 px 열을 «밑에 뭐가 들어왔나» 감시할지 (창 밑이 비쳐 찍히는 빌드용)
 OUTER_BAND = 10         # 우리 창 «바깥» 양옆 몇 px 에 내용이 들어오면 침입으로 볼지 (여백 MARGIN·RIGHT_MARGIN 보다 작아야 한다)
 SETTLE_CONFIRM_MS = 3000  # 재측정 결과가 지금 자리와 다르면 이만큼 뒤 한 번 더 재서 같을 때만 옮긴다
+HOVER_GUARD_MS = 250    # 호버 중엔 이 주기로 «실제 커서가 아직 바 위인가» 를 재확인해 카드를 닫는다 (Leave 누락 안전망)
 POPUP_SEC = 12          # 상세 팝업 자동 닫힘
 
 FROZEN = getattr(sys, "frozen", False)
@@ -273,6 +274,7 @@ class StatusBar:
         self.dots = []                                 # [(x0, x1, index)] — 페이지 점 히트 테스트용
         self.hover_target = None                       # 지금 하이라이트된 히트 다각형 태그
         self.leave_job = None                          # Leave 120ms 유예 (글자 사이 투명 픽셀에서의 연타 흡수)
+        self.hover_guard_job = None                    # 호버 안전망 폴링 (HOVER_GUARD_MS)
         self.last_pointer = None                       # (x, x_root, y_root) — 전환 뒤 같은 자리에서 다시 호버
         self.dots_span = None                          # 점 영역 전체 (x0, x1)
         self.mini_tip = None                           # 점 위 한 줄 툴팁
@@ -510,6 +512,8 @@ class StatusBar:
         need = self.place_and_draw()
         self.canvas.configure(width=need)
         _, top, _, _ = tb.win_rect(tb.taskbar())
+        if tb.win_rect(self.hwnd)[0] != self.gap[0]:
+            self.close_hover()                         # 바가 옮겨 가면 옛 자리에 붙어 있던 카드도 닫는다
         tb.place(self.hwnd, self.gap[0], top, need, self.h)
         self.root.deiconify()
         if tb.ensure_exstyle(self.hwnd):               # deiconify/-transparentcolor 가 ex-style 을 되돌렸으면 다시
@@ -648,9 +652,11 @@ class StatusBar:
         try:
             if tb.session_locked():
                 self.was_locked = True
+                self.close_hover()
             elif tb.fullscreen_app_active():
                 if not self.hidden_fullscreen:
                     self.hidden_fullscreen = True
+                    self.close_hover()
                     self.root.withdraw()
             elif self.hidden_fullscreen or self.was_locked:
                 self.hidden_fullscreen = self.was_locked = False
@@ -982,6 +988,7 @@ class StatusBar:
             self.set_hover(e)                          # relayout 이 지운 뒤 다시
 
     def on_enter(self, ev=None):
+        self.arm_hover_guard()
         if self.leave_job:                             # 유예 중이던 Leave 취소 (글자 사이 투명 픽셀 연타)
             self.root.after_cancel(self.leave_job)
             self.leave_job = None
@@ -992,7 +999,9 @@ class StatusBar:
 
     def on_leave(self, ev=None):
         """Leave 는 120ms 뒤에 확정 — 그 안에 Enter/Motion 이 오면 없던 일.
-        창 리사이즈(재측정)가 만드는 «가짜 Leave» 는 커서가 아직 위에 있으므로 무시한다 → 깜빡임·툴팁 소실 방지."""
+        창 리사이즈(재측정)가 만드는 «가짜 Leave» 는 커서가 아직 위에 있으므로 무시한다 → 깜빡임·툴팁 소실 방지.
+        단 투명 픽셀(마우스가 작업 표시줄로 통과) 위에서 온 Leave 도 여기서 무시되고, 그 뒤 창 밖으로 나갈 때는
+        Leave 가 다시 오지 않는다 — 그 경우는 hover_guard 가 실제 커서 좌표로 닫는다."""
         if tb.cursor_over(self.hwnd):
             return
         if self.leave_job:
@@ -1004,6 +1013,28 @@ class StatusBar:
             self.leave_job = None
             return
         self._do_leave_real()
+
+    def arm_hover_guard(self):
+        if not self.hover_guard_job:
+            self.hover_guard_job = self.root.after(HOVER_GUARD_MS, self.hover_guard)
+
+    def hover_guard(self):
+        """안전망: 호버·카드·점 툴팁이 살아 있는 동안 HOVER_GUARD_MS 마다 «실제 커서가 바 창 안인가» 를 보고, 아니면 닫는다.
+        Leave 이벤트가 오든 안 오든(투명 픽셀 통과·리사이즈·누락) 카드는 커서가 떠난 뒤 한 주기 안에 사라진다."""
+        self.hover_guard_job = None
+        if not (self.hovering or self.tooltip or self.mini_tip or self.tooltip_job):
+            return
+        if self.hidden_fullscreen or not tb.cursor_over(self.hwnd):
+            self.close_hover()
+            return
+        self.arm_hover_guard()
+
+    def close_hover(self):
+        """카드·점 툴팁·하이라이트를 닫고 호버 상태를 푼다 (살아 있는 게 있을 때만)."""
+        if self.hovering or self.tooltip or self.mini_tip or self.tooltip_job or self.leave_job:
+            if self.leave_job:
+                self.root.after_cancel(self.leave_job)
+            self._do_leave_real()
 
     def _do_leave_real(self):
         self.leave_job = None
@@ -1057,6 +1088,7 @@ class StatusBar:
         y = top - th - self.px(6) if top > 0 else bottom + self.px(6)
         tip.geometry(f"+{x}+{y}")
         self.mini_tip, self.mini_tip_text = tip, text
+        self.arm_hover_guard()
 
     def hide_mini_tip(self):
         if self.mini_tip:
@@ -1115,6 +1147,7 @@ class StatusBar:
         c.configure(width=w_, height=h_)
         self.tooltip = tip
         self.place_tooltip(x_root, y_root)
+        self.arm_hover_guard()
 
     def chip(self, c, x, cy, text, bg, fg="#ffffff", font=None, pad=7):
         """둥근 알약 칩. 오른쪽 끝 x 를 돌려준다."""
@@ -1407,6 +1440,7 @@ class StatusBar:
         return row + 2
 
     def open_settings(self, install_mode=False, tab=0):
+        self.close_hover()
         if self.settings_win:
             self.settings_win.lift()
             self.settings_win.focus_force()
