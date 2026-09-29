@@ -4,12 +4,16 @@
 창 사각형 안이라 «가짜 Leave» 로 무시된다. 그 뒤 창 밖으로 나갈 때는 Leave 가 다시 오지 않아 카드가 영영 남았다
 (hovering 도 True 로 남아 주기 재측정·자동 슬라이드까지 멈춘다).
 """
+import sys
 from types import SimpleNamespace
 
 import pytest
 
-import ai_status_bar as B
-import taskbar as tb
+if sys.platform != "win32":   # ai_status_bar(tkinter)·taskbar(ctypes.windll) 는 import 자체가 Windows 전용
+    pytest.skip("Windows 작업 표시줄 판 전용", allow_module_level=True)
+
+import ai_status_bar as B  # noqa: E402
+import taskbar as tb  # noqa: E402
 
 
 class FakeRoot:

@@ -4,12 +4,17 @@
 CONTENT_DIFF(28)를 넘어, 첫 빈 공간이 우리 창 양옆 조각으로 쪼개졌다 → 20초 재측정마다 왼쪽↔오른쪽 조각을 오가며
 폭(=표시 단계)까지 바뀌고, 조절 알림이 되풀이됐다. 여기서는 합성 작업 표시줄로 그 상황을 그대로 재현한다.
 """
+import sys
 from types import SimpleNamespace
 
 import pytest
-from PIL import Image, ImageDraw
 
-import ai_status_bar as B
+if sys.platform != "win32":   # ai_status_bar(tkinter)·taskbar(ctypes.windll) 는 import 자체가 Windows 전용
+    pytest.skip("Windows 작업 표시줄 판 전용", allow_module_level=True)
+
+from PIL import Image, ImageDraw  # noqa: E402
+
+import ai_status_bar as B  # noqa: E402
 import layout
 import taskbar as tb
 
