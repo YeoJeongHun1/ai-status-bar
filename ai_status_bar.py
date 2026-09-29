@@ -29,6 +29,7 @@ from tkinter import colorchooser, filedialog, messagebox, ttk
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import applog                                                             # noqa: E402
+import layout                                                             # noqa: E402
 import polling                                                            # noqa: E402
 import taskbar as tb                                                      # noqa: E402
 from i18n import LANG_NAMES, SUPPORTED, set_language, t, tr_error         # noqa: E402
@@ -52,7 +53,9 @@ MARGIN = 16             # 빈 구간 양끝에서 띄우는 여백(px, DPI 배�
 REMEASURE_SEC = 20      # 아무 변화 없어도 이 주기로 다시 잰다 (위젯 문구가 길어지는 것 등 — 캡처 제외라 깜빡임 없음)
 EDGE_MARGIN = 28        # 빈 구간이 화면 왼쪽 가장자리 블록(위젯·시작 버튼) 바로 뒤일 때의 왼쪽 여백
 RIGHT_MARGIN = 20       # 다음 내용 앞 여백
-EDGE_BAND = 24          # 우리 창 양끝 몇 px 열을 «밑에 뭐가 들어왔나» 감시할지
+EDGE_BAND = 24          # 우리 창 양끝 몇 px 열을 «밑에 뭐가 들어왔나» 감시할지 (창 밑이 비쳐 찍히는 빌드용)
+OUTER_BAND = 10         # 우리 창 «바깥» 양옆 몇 px 에 내용이 들어오면 침입으로 볼지 (여백 MARGIN·RIGHT_MARGIN 보다 작아야 한다)
+SETTLE_CONFIRM_MS = 3000  # 재측정 결과가 지금 자리와 다르면 이만큼 뒤 한 번 더 재서 같을 때만 옮긴다
 POPUP_SEC = 12          # 상세 팝업 자동 닫힘
 
 FROZEN = getattr(sys, "frozen", False)
@@ -243,6 +246,9 @@ class StatusBar:
         self.signature = None
         self.gap = (0, 0)
         self.gaps = []
+        self.settle = layout.Settle()                  # 한 번 튄 측정으로 자리를 옮기지 않는다 (같은 결과 2연속이어야 채택)
+        self.settle_job = None
+        self.edge_checked = None                       # 침입 감지로 재측정한 자리 — 같은 자리에서 되풀이 재측정하지 않는다
         self.was_locked = False
         self.hidden_fullscreen = False
         self.bg = (32, 32, 32)
@@ -488,38 +494,19 @@ class StatusBar:
         return {"auto": ("full", "compact", "collapsed"), "bars": ("full", "collapsed"),
                 "numbers": ("compact", "collapsed")}[(settings or self.settings)["style"]["bars"]]
 
-    def relayout(self, force=False):
-        """빈 공간을 (필요하면 다시) 재고, 들어가는 가장 큰 모드로 그린 뒤 그 자리에 놓는다."""
+    def relayout(self, force=False, settle=False):
+        """빈 공간을 (필요하면 다시) 재고, 들어가는 가장 큰 모드로 그린 뒤 그 자리에 놓는다.
+        settle=True (주기 재측정·작업 표시줄 변화·조회 뒤): 지금 자리가 새 측정에서도 멀쩡하면, 결과가 달라도 SETTLE_CONFIRM_MS 뒤
+        한 번 더 재서 같은 결과일 때만 옮긴다 — 튀는 측정 한 번이 위치·표시 단계·알림을 흔들지 못하게. 자리가 침범당했으면 즉시 옮긴다."""
         if tb.session_locked():
             self.was_locked = True
             return
         if self.hidden_fullscreen:
             return
         sig = tb.taskbar_signature()
-        m = int(MARGIN * self.scale)
         if force or sig != self.signature:
             self.signature = sig
-            if not self.capture_excluded:            # 옛 Windows: 잠깐 숨겨야 우리 자신이 안 찍힌다
-                self.root.withdraw()
-                self.root.update()
-                self.root.after(60)
-            gaps, bg = tb.measure_free_gaps(min_width=self.px(24) + 2 * m)
-            tb_left = tb.win_rect(tb.taskbar())[0]
-            widgets_right = tb.widgets_button_right()          # UIA 로 잡은 위젯 버튼 경계 — 픽셀 결과와 OR
-            fixed = []
-            for i, (x0, x1) in enumerate(gaps):
-                if widgets_right is not None and x0 < widgets_right:
-                    x0 = widgets_right
-                    if x1 - x0 < self.px(24):
-                        continue
-                edge = (i == 0 and x0 > tb_left + 2)            # 화면 왼쪽 가장자리 블록 바로 뒤
-                ml = self.px(EDGE_MARGIN) if edge else m
-                fixed.append((x0 + ml, x1 - self.px(RIGHT_MARGIN)))
-            self.gaps = [g for g in fixed if g[1] - g[0] >= self.px(24)]
-            self.set_palette(bg)
-            self.canvas.configure(bg=self.key)
-            self.root.configure(bg=self.key)
-            self.root.attributes("-transparentcolor", self.key)
+            self.measure(settle)
         need = self.place_and_draw()
         self.canvas.configure(width=need)
         _, top, _, _ = tb.win_rect(tb.taskbar())
@@ -528,6 +515,63 @@ class StatusBar:
         if tb.ensure_exstyle(self.hwnd):               # deiconify/-transparentcolor 가 ex-style 을 되돌렸으면 다시
             tb.raise_topmost(self.hwnd)
         self.rehover()
+
+    def own_span(self):
+        """지금 화면에 떠 있는 우리 창의 (x0, x1) — 안 떠 있으면 None."""
+        if self.root.state() == "withdrawn" or not tb.user32.IsWindowVisible(self.hwnd):
+            return None
+        l, _, r, _ = tb.win_rect(self.hwnd)
+        return (l, r) if r > l else None
+
+    def measure(self, settle):
+        """작업 표시줄을 재서 self.gaps(여백 적용된 후보 구간)·배경색을 갱신한다.
+        우리 창이 떠 있으면 캡처에 찍힌 «제외 구멍» 은 빈 열로 친다 (tb.hole_columns). 그 구멍 밑은 안 보이므로,
+        우리 자리 양옆 OUTER_BAND 까지 내용이 들어와 있으면 한 번만 숨기고 진짜로 다시 잰다."""
+        m = int(MARGIN * self.scale)
+        min_w = self.px(24) + 2 * m
+        own = self.own_span() if self.capture_excluded else None
+        if not self.capture_excluded:                # 옛 Windows: 잠깐 숨겨야 우리 자신이 안 찍힌다
+            gaps, bg = self.measure_hidden(min_w)
+        else:
+            gaps, bg = tb.measure_free_gaps(min_width=min_w, own=own)
+            if own and not layout.spot_clear(own, gaps, self.px(OUTER_BAND)):
+                gaps, bg = self.measure_hidden(min_w)
+                own = None                           # 자리가 침범당했다 — 확인 대기 없이 바로 옮긴다
+        tb_left = tb.win_rect(tb.taskbar())[0]
+        widgets_right = tb.widgets_button_right()          # UIA 로 잡은 위젯 버튼 경계 — 픽셀 결과와 OR
+        fixed = []
+        for i, (x0, x1) in enumerate(gaps):
+            if widgets_right is not None and x0 < widgets_right:
+                x0 = widgets_right
+                if x1 - x0 < self.px(24):
+                    continue
+            edge = (i == 0 and x0 > tb_left + 2)            # 화면 왼쪽 가장자리 블록 바로 뒤
+            ml = self.px(EDGE_MARGIN) if edge else m
+            fixed.append((x0 + ml, x1 - self.px(RIGHT_MARGIN)))
+        new = [g for g in fixed if g[1] - g[0] >= self.px(24)]
+        verdict = self.settle.offer(self.gaps, new) if (settle and own and self.gaps) else "accept"
+        if verdict == "accept":
+            self.settle.reset()
+            self.gaps = new
+        elif verdict == "wait" and not self.settle_job:
+            self.settle_job = self.root.after(SETTLE_CONFIRM_MS, self.settle_check)
+        self.set_palette(bg)
+        self.canvas.configure(bg=self.key)
+        self.root.configure(bg=self.key)
+        self.root.attributes("-transparentcolor", self.key)
+
+    def measure_hidden(self, min_w):
+        self.root.withdraw()
+        self.root.update()
+        self.root.after(60)
+        return tb.measure_free_gaps(min_width=min_w)
+
+    def settle_check(self):
+        self.settle_job = None
+        if not self.hidden_fullscreen and not self.hovering:
+            self.relayout(force=True, settle=True)
+        elif self.settle.pending is not None:
+            self.settle_job = self.root.after(SETTLE_CONFIRM_MS, self.settle_check)
 
     def candidate_gaps(self):
         """placement=left 면 첫 빈 공간 하나(다른 빈 공간으로 건너뛰지 않는다), auto 면 전부."""
@@ -612,7 +656,7 @@ class StatusBar:
                 self.hidden_fullscreen = self.was_locked = False
                 self.relayout(force=True)
             elif tb.taskbar_signature() != self.signature:
-                self.relayout()
+                self.relayout(settle=True)
             elif self.capture_excluded and self.something_under_edges():
                 self.relayout(force=True)              # 위젯 문구가 길어져 우리 밑으로 들어옴 → 즉시 자리 옮김
             else:
@@ -622,19 +666,30 @@ class StatusBar:
         self.root.after(2000, self.watch)
 
     def something_under_edges(self):
-        """우리 창 양끝 EDGE_BAND 열 밑에 내용 픽셀이 있으면 True (우리는 캡처에서 빠져 있어 밑이 보인다)."""
+        """우리 창 양끝 EDGE_BAND 열 «밑» (창 밑이 비쳐 찍히는 빌드) 이나 창 «바깥» 양옆 OUTER_BAND 열 (창이 구멍으로 찍히는 빌드 —
+        밑이 안 보이므로 여백에 들어선 순간 잡는다) 에 내용이 있으면 True. 같은 자리에서 이미 한 번 재측정했는데도 계속 걸리면
+        (여백 안의 고정된 무언가) 되풀이하지 않는다 — 2초마다 재측정·재배치가 도는 진동을 막는다."""
         try:
             l, t_, r, b = tb.win_rect(self.hwnd)
             if r - l < self.px(60) or self.mode == "collapsed":
                 return False
-            left_hit, right_hit = tb.strip_has_content(l, t_ + self.px(6), r, b - self.px(6), self.px(EDGE_BAND))
-            return left_hit or right_hit
+            y0, y1 = t_ + self.px(6), b - self.px(6)
+            left_hit, right_hit = tb.strip_has_content(l, y0, r, y1, self.px(EDGE_BAND))
+            out_l, out_r = tb.bands_have_content(l, y0, r, y1, self.px(OUTER_BAND), self.bg)
+            hit = left_hit or right_hit or out_l or out_r
+            if not hit:
+                self.edge_checked = None
+                return False
+            if self.edge_checked == (l, r):
+                return False
+            self.edge_checked = (l, r)
+            return True
         except Exception:
             return False
 
     def periodic_measure(self):
         if not self.hidden_fullscreen and not self.hovering:   # 호버 중엔 미룬다 — Leave 뒤 다음 주기에 잰다
-            self.relayout(force=True)
+            self.relayout(force=True, settle=True)
         self.root.after(REMEASURE_SEC * 1000, self.periodic_measure)
 
     # --- 데이터 ---
@@ -676,7 +731,7 @@ class StatusBar:
         self.call_soon(self.after_refresh)
 
     def after_refresh(self):
-        self.relayout()
+        self.relayout(settle=True)
         self.update_tray()
         self.check_alerts()
         if self.settings_win:

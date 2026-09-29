@@ -12,6 +12,7 @@ from ctypes import wintypes
 from PIL import Image, ImageChops, ImageGrab
 
 CONTENT_DIFF = 28       # 배경과 이만큼(0~255) 다르면 '내용 있는 픽셀'
+HOLE_MAX = 2            # 캡처 제외 창이 순흑 «구멍» 으로 찍힐 때: 열의 모든 픽셀 밝기가 이 이하면 구멍
 
 user32 = ctypes.windll.user32
 user32.FindWindowW.restype = wintypes.HWND
@@ -108,10 +109,34 @@ def taskbar_signature():
     return tuple(parts)
 
 
-def measure_free_gaps(min_width):
-    """작업 표시줄 캡처 → 비어 있는 열이 min_width 이상 이어진 구간들 [(x0, x1), ...] (왼쪽부터) 과 배경색."""
+def measure_free_gaps(min_width, own=None):
+    """작업 표시줄 캡처 → 비어 있는 열이 min_width 이상 이어진 구간들 [(x0, x1), ...] (왼쪽부터) 과 배경색.
+    own = 지금 떠 있는 우리 창 (x0, x1) — 그 안의 «구멍» 열은 빈 열로 본다 (free_gaps_from_image)."""
     left, top, right, bottom = win_rect(taskbar())
     img = ImageGrab.grab(bbox=(left, top, right, bottom)).convert("RGB")
+    return free_gaps_from_image(img, left, min_width, own)
+
+
+def hole_columns(img, left, own):
+    """우리 창 (x0, x1) 범위에서 «캡처 제외 구멍» 인 열의 집합 (이미지 x 기준).
+    WDA_EXCLUDEFROMCAPTURE 창은 빌드·드라이버에 따라 «밑이 비쳐 보이거나» «순흑(0,0,0) 구멍» 으로 찍힌다 (26-09-29 이 PC 실측:
+    구멍). 작업 표시줄 배경(~34)과 순흑의 차이가 CONTENT_DIFF(28)를 넘어 우리 자신이 «내용» 으로 잡혔고, 첫 빈 공간이
+    우리 창 양옆 조각으로 쪼개져 20초 재측정마다 왼쪽↔오른쪽 조각을 오갔다. 구멍 열만 골라 내므로 밑이 비치는 빌드에서는
+    아무것도 빼지 않는다 (그때는 밑의 진짜 내용을 그대로 본다)."""
+    if not own:
+        return set()
+    w, h = img.size
+    a, b = max(0, own[0] - left), min(w, own[1] - left)
+    if b <= a:
+        return set()
+    lum = img.crop((a, 0, b, h)).convert("L")
+    cw = b - a
+    raw = lum.tobytes()
+    return {a + x for x in range(cw) if max(raw[x::cw]) <= HOLE_MAX}
+
+
+def free_gaps_from_image(img, left, min_width, own=None):
+    """measure_free_gaps 의 순수 계산부 (캡처 이미지 → 빈 구간·배경색). 테스트는 합성 이미지로 이걸 부른다."""
     w, h = img.size
     raw = img.tobytes()
     med = bytearray()
@@ -123,6 +148,8 @@ def measure_free_gaps(min_width):
     r, g, b = ImageChops.difference(img, row_bg).split()
     diff = ImageChops.lighter(ImageChops.lighter(r, g), b).point(lambda v: 255 if v > CONTENT_DIFF else 0)
     content = [v > 0 for v in diff.resize((w, 1), Image.BOX).tobytes()]
+    for x in hole_columns(img, left, own):
+        content[x] = False
     bg = tuple(sorted(med[c::3])[h // 2] for c in range(3))
     gaps, run_start = [], None
     for x, filled in enumerate(list(content) + [True]):
@@ -208,6 +235,24 @@ def strip_has_content(x0, y0, x1, y1, band):
     diff = ImageChops.lighter(ImageChops.lighter(r, g), b).point(lambda v: 255 if v > CONTENT_DIFF else 0)
     cols = diff.resize((w, 1), Image.BOX).tobytes()
     return any(v > 0 for v in cols[:band]), any(v > 0 for v in cols[-band:])
+
+
+def bands_have_content(x0, y0, x1, y1, band, bg):
+    """우리 창 «바깥» 양옆 band px 열에 내용이 있는지 → (left_hit, right_hit). 배경은 재측정 때 잰 bg.
+    캡처 제외 창이 구멍으로 찍히는 빌드에선 창 밑이 안 보이므로(strip_has_content 무력), 밀고 들어오는 내용을
+    우리 여백(≥16px)에 들어선 순간 여기서 잡는다."""
+    left, _, right, _ = win_rect(taskbar())
+    a, b = max(left, x0 - band), min(right, x1 + band)
+    if b - a <= 0 or y1 <= y0:
+        return False, False
+    img = ImageGrab.grab(bbox=(a, y0, b, y1)).convert("RGB")
+    w, h = img.size
+    ref = Image.new("RGB", (w, h), tuple(bg))
+    r, g, bb = ImageChops.difference(img, ref).split()
+    diff = ImageChops.lighter(ImageChops.lighter(r, g), bb).point(lambda v: 255 if v > CONTENT_DIFF else 0)
+    cols = diff.resize((w, 1), Image.BOX).tobytes()
+    lw, rw = x0 - a, b - x1
+    return (lw > 0 and any(v > 0 for v in cols[:lw])), (rw > 0 and any(v > 0 for v in cols[w - rw:]))
 
 
 # --- 위젯 버튼의 정확한 오른쪽 경계: UI Automation COM 을 ctypes 로 직접 호출 (PowerShell·외부 프로세스 없음) ---
